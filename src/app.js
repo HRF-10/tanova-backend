@@ -79,7 +79,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   app.get('/', { schema: { hide: true } }, async () => ({ name: 'Tanova App API', docs: '/docs', api: '/api/v1' }));
   app.get('/health', { schema: { tags: ['Health'], summary: 'Cek kesehatan layanan' } }, async () => {
     await db.raw('select 1');
-    return { status: 'ok', database: 'mysql', thingsboard: env.tb.mock ? 'mock' : 'live', time: new Date().toISOString() };
+    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', time: new Date().toISOString() };
   });
 
   await app.register(async (api) => {

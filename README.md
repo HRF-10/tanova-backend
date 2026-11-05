@@ -10,7 +10,7 @@ Paket ini berisi dua bagian yang saling terhubung:
 ```
 Aplikasi (frontend) <--REST/SSE--> Backend Fastify <--REST API--> ThingsBoard <--MQTT--> Raspberry Pi (service_1.py)
         |                              |                                                  |-- Redis (keadaan terakhir)
-        |                              +-- MySQL                                          |-- Mosquitto lokal -> Wemos (kontrol relay) dan sensor
+        |                              +-- Supabase (PostgreSQL)                                          |-- Mosquitto lokal -> Wemos (kontrol relay) dan sensor
         +-- Proses AI (di aplikasi)
         +-- Kamera ESP32-S3 CAM (terpisah dari Raspberry Pi)
 ```
@@ -35,6 +35,9 @@ src/config/contract.js       kontrak backend dan service (RPC, atribut, batas pe
 simulator/            simulator service (pengganti Raspberry Pi untuk uji)
 tools/                ThingsBoard tiruan untuk uji tanpa internet (opsional)
 docs/PANDUAN-ENV.md          panduan mengisi file .env, termasuk penjelasan JWT
+docs/PANDUAN-SUPABASE.md     panduan database Supabase
+docs/PANDUAN-UJI-SIMULATOR.md  panduan menguji simulator pada backend asli
+tools/check-backend.js       pemeriksa otomatis backend dan service (npm run check)
 docs/KONTRAK-SERVICE.md      aturan yang harus dipenuhi service
 raspi/                service_1.py asli (belum dipakai) beserta catatan perbaikannya
 .env.example          contoh pengaturan backend
@@ -110,17 +113,11 @@ WantedBy=multi-user.target
 
 Lalu jalankan `sudo systemctl enable --now tanova` dan lihat log dengan `journalctl -u tanova -f`.
 
-### Langkah 3. Siapkan MySQL
+### Langkah 3. Siapkan database Supabase
 
-Pasang MySQL atau MariaDB (di Windows bisa lewat XAMPP atau MySQL Installer). Lalu buat database dan user:
+Backend memakai Supabase sebagai database PostgreSQL. Buat proyek di supabase.com, lalu salin **connection string** (tombol Connect, tipe Session pooler) ke `DATABASE_URL` di `.env`. Langkah lengkap, cara mengatasi password dengan karakter khusus, dan penjelasan keamanan (Row Level Security) ada di `docs/PANDUAN-SUPABASE.md`.
 
-```sql
-CREATE DATABASE tanova CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'tanova'@'localhost' IDENTIFIED BY 'password-anda';
-GRANT ALL ON tanova.* TO 'tanova'@'localhost';
-```
-
-Jika Anda langsung memakai user `root`, database dibuat otomatis saat backend pertama kali jalan (`DB_AUTO_CREATE=true`). Tabel selalu dibuat otomatis lewat migrasi.
+Tabel dibuat otomatis lewat migrasi saat backend atau `npm run seed` pertama kali dijalankan.
 
 ### Langkah 4. Jalankan backend
 
@@ -128,7 +125,7 @@ Butuh Node.js 20 atau lebih baru.
 
 ```bash
 npm install
-cp .env.example .env     # isi DB_USER dan DB_PASSWORD
+cp .env.example .env     # isi DATABASE_URL (lihat docs/PANDUAN-SUPABASE.md)
 npm run gen-secrets      # cetak tiga kunci rahasia, tempel ke .env (lihat docs/PANDUAN-ENV.md)
 npm run seed             # membuat admin dan data contoh
 npm run dev              # atau: npm start
@@ -165,6 +162,14 @@ Setiap perangkat punya objek `connection` pada `GET /devices`, `GET /devices/:id
 Objek itu juga berisi `message`, `online`, `sensor_online`, dan `last_seen`. Status `connected` berarti Raspberry Pi sedang tersambung ke ThingsBoard lewat access token di `raspi/.env`. Itulah yang membuat Device ID di setting koneksi tampil sebagai terhubung.
 
 ### Langkah 6. Uji tanpa alat dengan simulator
+
+Panduan langkah demi langkah untuk menguji simulator pada backend asli (Supabase dan ThingsBoard Cloud) ada di `docs/PANDUAN-UJI-SIMULATOR.md`. Setelah backend dan simulator berjalan, satu perintah menjalankan 13 pemeriksaan otomatis:
+
+```bash
+npm run check -- --device-id=<Device ID> --tb-user=<email ThingsBoard> --tb-pass=<password ThingsBoard>
+```
+
+Bagian di bawah ini adalah ringkasannya.
 
 Simulator berperan sebagai Raspberry Pi: terhubung ke ThingsBoard lewat MQTT, mengirim telemetri, menerima perintah, dan membalas persis seperti kontrak. Nama variabel `.env`-nya sama dengan service asli.
 
@@ -339,8 +344,8 @@ Peran pengguna: `admin` (semua akses), `operator` (kontrol dan kelola greenhouse
 
 ## 8. Status pengujian
 
-- Alur lengkap diuji dengan simulator dan ThingsBoard tiruan di atas MariaDB: tes koneksi, status koneksi, kontrol kipas dan dosis, penolakan dosis ganda, mode, pengaturan, peringatan, sensor putus, dan simulator dimatikan.
-- Backend diuji di atas MariaDB (kompatibel dengan MySQL) dengan data simulasi, dan dengan ThingsBoard tiruan yang meniru kontrak `service_1.py` (telemetri, RPC `setActuator` dan `setConfig`, balasan ditolak, perangkat offline, akun benar dan salah).
+- Alur lengkap diuji dengan simulator dan ThingsBoard tiruan di atas PostgreSQL: tes koneksi, status koneksi, kontrol kipas dan dosis, penolakan dosis ganda, mode, pengaturan, peringatan, sensor putus, dan simulator dimatikan.
+- Backend diuji di atas PostgreSQL dengan data simulasi, dan dengan ThingsBoard tiruan yang meniru kontrak `service_1.py` (telemetri, RPC `setActuator` dan `setConfig`, balasan ditolak, perangkat offline, akun benar dan salah).
 - `raspi/service_1.py` baru diperiksa sintaks dan logikanya dibaca ulang. **Belum dijalankan di Raspberry Pi dan relay sungguhan.** Uji dulu dengan beban relay yang aman sebelum dipakai pada pompa.
 - Belum diuji dengan ThingsBoard, Wemos, dan Raspberry Pi sungguhan.
 
@@ -350,4 +355,5 @@ Peran pengguna: `admin` (semua akses), `operator` (kontrol dan kelola greenhouse
 - Folder `/uploads` disajikan publik dengan nama file acak. Pindahkan ke object storage bila foto sensitif.
 - Jalankan di belakang reverse proxy HTTPS (Nginx atau Caddy).
 - Ganti `CREDENTIAL_ENCRYPTION_KEY` sebelum ada pengguna yang menyimpan koneksi, dan simpan kuncinya dengan aman.
-- Backup database MySQL secara berkala. Tabel `devices` berisi password ThingsBoard terenkripsi.
+- Ekspor atau backup database Supabase secara berkala. Tabel `devices` berisi password ThingsBoard terenkripsi.
+- Jangan menonaktifkan Row Level Security pada tabel. Tabel baru yang dibuat lewat migrasi juga harus mengaktifkannya (lihat `docs/PANDUAN-SUPABASE.md`).

@@ -6,7 +6,7 @@ File `.env` berisi pengaturan yang berbeda di tiap komputer, misalnya password d
 
 1. Salin contohnya: `cp .env.example .env` (di Windows: salin file `.env.example` lalu ganti namanya menjadi `.env`).
 2. Buat tiga kunci rahasia otomatis: `npm run gen-secrets`. Hasilnya tiga baris. Salin ke `.env` dan ganti baris lama yang namanya sama (`JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`).
-3. Isi data database: `DB_USER`, `DB_PASSWORD`, `DB_NAME`.
+3. Isi `DATABASE_URL` dengan connection string dari Supabase (caranya di `docs/PANDUAN-SUPABASE.md`).
 4. Simpan, lalu jalankan `npm run seed` dan `npm run dev`.
 5. Setiap kali `.env` diubah, **backend harus dijalankan ulang**.
 
@@ -55,19 +55,16 @@ Jika browser menampilkan galat CORS, nilai `CORS_ORIGIN` belum sama dengan alama
 
 `CREDENTIAL_ENCRYPTION_KEY` berbeda dari JWT. Kunci ini **jangan diganti** setelah ada pengguna yang menyimpan koneksi ThingsBoard, karena password lama tidak akan terbaca lagi (pengguna harus mengisi ulang). Simpan salinannya di tempat aman.
 
-### Database MySQL
+### Database (Supabase)
 
 | Nama | Arti | Bawaan |
 | --- | --- | --- |
-| `DB_HOST` | Alamat MySQL | `127.0.0.1` |
-| `DB_PORT` | Port MySQL | `3306` |
-| `DB_USER` | Nama pengguna MySQL | `root` |
-| `DB_PASSWORD` | Password MySQL | kosong |
-| `DB_NAME` | Nama database | `tanova` |
-| `DB_AUTO_CREATE` | `true` = buat database bila belum ada | `true` |
+| `DATABASE_URL` | Connection string PostgreSQL dari Supabase (tombol Connect, tipe Session pooler). **Wajib diisi** | kosong |
+| `DB_SSL` | `true` = koneksi terenkripsi SSL. Supabase mewajibkannya. `false` hanya untuk PostgreSQL lokal | `true` |
+| `DB_POOL_MAX` | Jumlah koneksi maksimal ke database. Paket gratis terbatas, jadi jangan dinaikkan tanpa perlu | `5` |
 | `AUTO_MIGRATE` | `true` = buat dan perbarui tabel otomatis saat start | `true` |
 
-Pada XAMPP, pengaturan bawaan sudah benar: user `root` dengan password kosong. Aktifkan MySQL di panel XAMPP lebih dulu.
+Jika password database mengandung karakter khusus (`@`, `#`, `/`, `:`), password di dalam `DATABASE_URL` harus di-URL-encode. Lebih mudah: reset password Supabase menjadi huruf dan angka saja. Detailnya ada di `docs/PANDUAN-SUPABASE.md`.
 
 ### ThingsBoard
 
@@ -107,9 +104,8 @@ CORS_ORIGIN=http://localhost:5173
 JWT_SECRET=<hasil gen-secrets>
 JWT_REFRESH_SECRET=<hasil gen-secrets>
 CREDENTIAL_ENCRYPTION_KEY=<hasil gen-secrets>
-DB_USER=root
-DB_PASSWORD=
-DB_NAME=tanova
+DATABASE_URL=<connection string Supabase>
+DB_SSL=true
 THINGSBOARD_MOCK=true
 ```
 
@@ -122,15 +118,17 @@ Sama seperti A, tetapi `THINGSBOARD_MOCK=false` dan `TB_URL=https://thingsboard.
 - `NODE_ENV=production`
 - Tiga kunci rahasia dibuat baru dengan `npm run gen-secrets`
 - `CORS_ORIGIN` berisi alamat frontend yang sebenarnya, bukan `*`
-- Password database dan password admin seed kuat
+- `DATABASE_URL` memakai password database yang kuat, dan password admin seed diganti
 - `THINGSBOARD_MOCK=false`
 
 ## Gejala dan penyebabnya
 
 | Pesan atau gejala | Penyebab | Perbaikan |
 | --- | --- | --- |
-| `Access denied for user` | `DB_USER` atau `DB_PASSWORD` salah | Periksa isi `.env` |
-| `ECONNREFUSED 127.0.0.1:3306` | MySQL belum menyala | Nyalakan MySQL (XAMPP) |
+| `DATABASE_URL belum diisi` | Baris `DATABASE_URL` kosong | Isi connection string dari Supabase |
+| `password authentication failed` | Password database salah, atau karakter khusus belum di-encode | Reset password Supabase ke huruf dan angka |
+| `ENOTFOUND` atau `ETIMEDOUT` ke `db.xxx.supabase.co` | Memakai Direct connection (hanya IPv6) | Pakai tipe Session pooler |
+| `Tenant or user not found` | Nama pengguna pooler salah | Salin ulang string dari tombol Connect |
 | `JWT_SECRET dan CREDENTIAL_ENCRYPTION_KEY wajib diganti` | Mode production dengan kunci bawaan | Jalankan `npm run gen-secrets` |
 | Semua pengguna tiba-tiba logout | `JWT_SECRET` diganti | Wajar, login ulang |
 | Password ThingsBoard yang tersimpan tidak terbaca | `CREDENTIAL_ENCRYPTION_KEY` diganti | Pengguna mengisi ulang koneksi |

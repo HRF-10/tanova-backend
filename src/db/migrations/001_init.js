@@ -1,8 +1,6 @@
 // Semua waktu disimpan sebagai epoch milidetik (bigInteger) agar portabel antar database.
 export async function up(knex) {
   await knex.schema.createTable('greenhouses', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('name').notNullable();
     t.string('location');
@@ -14,8 +12,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('users', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36).references('id').inTable('greenhouses').onDelete('SET NULL');
     t.string('name').notNullable();
@@ -31,8 +27,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('devices', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36).notNullable().references('id').inTable('greenhouses').onDelete('CASCADE');
     t.string('name').notNullable();
@@ -52,8 +46,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('sensors', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('device_id', 36).notNullable().references('id').inTable('devices').onDelete('CASCADE');
     t.string('type', 20).notNullable(); // ph | ec | tds | water_temp | tank_level | other
@@ -66,8 +58,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('actuators', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('device_id', 36).notNullable().references('id').inTable('devices').onDelete('CASCADE');
     t.string('name').notNullable();
@@ -82,8 +72,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('sensor_calibrations', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('sensor_id', 36).notNullable().references('id').inTable('sensors').onDelete('CASCADE');
     t.bigInteger('calibrated_at').notNullable();
@@ -97,8 +85,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('alert_rules', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36).notNullable().references('id').inTable('greenhouses').onDelete('CASCADE');
     t.string('device_id', 36).references('id').inTable('devices').onDelete('CASCADE'); // null = semua perangkat
@@ -116,8 +102,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('alert_events', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36).notNullable().references('id').inTable('greenhouses').onDelete('CASCADE');
     t.string('rule_id', 36).references('id').inTable('alert_rules').onDelete('SET NULL');
@@ -135,8 +119,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('ai_diagnoses', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36).notNullable().references('id').inTable('greenhouses').onDelete('CASCADE');
     t.string('device_id', 36).references('id').inTable('devices').onDelete('SET NULL');
@@ -155,8 +137,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('growth_records', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36).notNullable().references('id').inTable('greenhouses').onDelete('CASCADE');
     t.string('device_id', 36).references('id').inTable('devices').onDelete('SET NULL');
@@ -170,8 +150,6 @@ export async function up(knex) {
   });
 
   await knex.schema.createTable('activity_logs', (t) => {
-    t.charset('utf8mb4');
-    t.collate('utf8mb4_unicode_ci');
     t.string('id', 36).primary();
     t.string('greenhouse_id', 36);
     t.string('user_id', 36);

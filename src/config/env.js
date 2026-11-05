@@ -23,14 +23,12 @@ export const env = {
   },
 
   db: {
-    client: 'mysql2',
-    host: process.env.DB_HOST || '127.0.0.1',
-    port: int(process.env.DB_PORT, 3306),
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    name: process.env.DB_NAME || 'tanova',
+    // Connection string PostgreSQL dari Supabase (Project Settings > Database > Connection string)
+    url: process.env.DATABASE_URL || '',
+    // Supabase mewajibkan SSL. Ubah ke false hanya untuk PostgreSQL lokal tanpa SSL.
+    ssl: bool(process.env.DB_SSL, true),
+    poolMax: int(process.env.DB_POOL_MAX, 5),
     autoMigrate: bool(process.env.AUTO_MIGRATE, true),
-    autoCreate: bool(process.env.DB_AUTO_CREATE, true),
   },
 
   // Kunci enkripsi untuk kredensial ThingsBoard yang disimpan di database (WAJIB diganti di produksi)

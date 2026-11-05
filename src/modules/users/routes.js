@@ -88,7 +88,7 @@ export default async function userRoutes(app) {
   }, async (request) => {
     const { page, limit, offset } = pageParams(request.query);
     const base = db('users');
-    if (request.query.q) base.where((b) => b.where('name', 'like', contains(request.query.q)).orWhere('email', 'like', contains(request.query.q)));
+    if (request.query.q) base.where((b) => b.where('name', 'ilike', contains(request.query.q)).orWhere('email', 'ilike', contains(request.query.q)));
     const [{ total }] = await base.clone().count({ total: '*' });
     const rows = await base.orderBy('created_at', 'desc').limit(limit).offset(offset);
     return { data: rows.map((r) => dto(r, { omit: ['password_hash'] })), meta: pageMeta(page, limit, Number(total)) };

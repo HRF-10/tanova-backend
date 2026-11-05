@@ -11,7 +11,8 @@
     "seed": "node src/scripts/seed.js",
     "simulator": "node simulator/tanova-simulator.js",
     "fake-tb": "node tools/fake-thingsboard.js",
-    "gen-secrets": "node src/scripts/gen-secrets.js"
+    "gen-secrets": "node src/scripts/gen-secrets.js",
+    "check": "node tools/check-backend.js"
   },
   "license": "UNLICENSED",
   "dependencies": {
@@ -29,7 +30,7 @@
     "fastify-plugin": "^6.0.1",
     "knex": "^3.3.0",
     "mqtt": "^5.16.1",
-    "mysql2": "^3.24.6"
+    "pg": "^8.23.1"
   },
   "private": true,
   "type": "module",

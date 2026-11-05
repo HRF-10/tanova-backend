@@ -90,7 +90,7 @@ export default async function telemetryRoutes(app) {
       .select('activity_logs.*', 'users.name as user_name');
     if (scope) q.where('activity_logs.greenhouse_id', scope);
     const { action, user_id, from, to } = request.query;
-    if (action) q.where('activity_logs.action', 'like', startsWith(action));
+    if (action) q.where('activity_logs.action', 'ilike', startsWith(action));
     if (user_id) q.where('activity_logs.user_id', user_id);
     if (from) q.where('activity_logs.created_at', '>=', toMs(from, 0));
     if (to) q.where('activity_logs.created_at', '<=', toMs(to, now()));
