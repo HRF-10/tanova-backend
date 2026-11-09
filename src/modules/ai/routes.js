@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -13,6 +14,8 @@ import { findDevice } from '../../lib/devices.js';
 import { ghScope } from '../../lib/scope.js';
 import { logActivity } from '../../lib/activity.js';
 import { recommend } from '../../services/recommendations.js';
+import { analyzePlantImage } from '../../services/tanovaAi.js';
+import { saveImage, sniffMime } from '../../services/imageStore.js';
 
 const tags = ['Tanova AI'];
 const security = [{ bearerAuth: [] }];
@@ -29,6 +32,65 @@ export default async function aiRoutes(app) {
 
   // Pemrosesan AI dilakukan di sisi aplikasi; aplikasi mengirim hasilnya ke sini memakai login pengguna.
   const userOnly = [app.authenticate, app.requireRole('admin', 'operator')];
+
+  // ESP32 kirim x-api-key (CAMERA_API_KEY); aplikasi kirim Bearer token seperti biasa.
+  const hash = (v) => crypto.createHash('sha256').update(String(v)).digest();
+  const cameraOrUser = async (request) => {
+    const key = request.headers['x-api-key'];
+    if (key) {
+      if (!env.ai.cameraApiKey || !crypto.timingSafeEqual(hash(key), hash(env.ai.cameraApiKey))) {
+        throw httpError(401, 'API key kamera tidak valid', 'INVALID_API_KEY');
+      }
+      request.isCamera = true;
+      return;
+    }
+    await app.authenticate(request);
+    await app.requireRole('admin', 'operator')(request);
+  };
+
+  // ESP32 paling mudah mengirim frame JPEG sebagai body mentah (tanpa multipart).
+  app.addContentTypeParser(
+    ['image/jpeg', 'image/png', 'image/webp', 'application/octet-stream'],
+    { parseAs: 'buffer', bodyLimit: env.maxUploadMb * 1024 * 1024 },
+    (req, body, done) => done(null, body),
+  );
+
+  async function createDiagnosis(request, { greenhouse_id, device, category, label, confidence, severity, details, recommendation, recommended_actions, image_url, captured_at }) {
+    const auto = recommend(label);
+    const t = now();
+    const row = {
+      id: newId(),
+      greenhouse_id,
+      device_id: device?.id ?? null,
+      captured_at: toMs(captured_at, t),
+      image_url: image_url ?? null,
+      category,
+      label: label.trim(),
+      confidence,
+      severity,
+      details: toJson(details),
+      recommendation: recommendation || auto.recommendation,
+      recommended_actions: toJson(recommended_actions || auto.actions),
+      action_status: 'pending',
+      created_at: t,
+    };
+    await db('ai_diagnoses').insert(row);
+
+    if (severity === 'high') {
+      await db('alert_events').insert({
+        id: newId(),
+        greenhouse_id,
+        device_id: device?.id ?? null,
+        source: 'ai',
+        severity: 'critical',
+        title: `[AI] ${row.label}`,
+        message: `${row.recommendation} Tingkat keparahan tinggi${confidence !== null ? `, keyakinan ${Math.round(confidence * 100)}%` : ''}.`,
+        created_at: t,
+      });
+    }
+    await logActivity(request, { action: 'ai.diagnosis_create', entity: 'ai_diagnosis', entity_id: row.id, description: `Diagnosis AI: ${row.label}`, greenhouse_id });
+    return row;
+  }
 
   // Tentukan greenhouse + device untuk data yang masuk
   async function resolveTarget(request, deviceId) {
@@ -94,40 +156,97 @@ export default async function aiRoutes(app) {
     }
 
     const { greenhouse_id, device } = await resolveTarget(request, body.device_id);
-    const auto = recommend(body.label);
-    const t = now();
-    const row = {
-      id: newId(),
-      greenhouse_id,
-      device_id: device?.id ?? null,
-      captured_at: toMs(body.captured_at, t),
-      image_url: body.image_url ?? null,
-      category,
-      label: body.label.trim(),
-      confidence,
-      severity,
-      details: toJson(body.details),
-      recommendation: body.recommendation || auto.recommendation,
-      recommended_actions: toJson(body.recommended_actions || auto.actions),
-      action_status: 'pending',
-      created_at: t,
-    };
-    await db('ai_diagnoses').insert(row);
+    const row = await createDiagnosis(request, {
+      greenhouse_id, device, category, confidence, severity,
+      label: body.label,
+      details: body.details,
+      recommendation: body.recommendation,
+      recommended_actions: body.recommended_actions,
+      image_url: body.image_url,
+      captured_at: body.captured_at,
+    });
+    return reply.code(201).send(diagnosisDto(row));
+  });
 
-    if (severity === 'high') {
-      await db('alert_events').insert({
-        id: newId(),
-        greenhouse_id,
-        device_id: device?.id ?? null,
-        source: 'ai',
-        severity: 'critical',
-        title: `[AI] ${row.label}`,
-        message: `${row.recommendation} Tingkat keparahan tinggi${confidence !== null ? `, keyakinan ${Math.round(confidence * 100)}%` : ''}.`,
-        created_at: t,
+  // Foto dari kamera (atau aplikasi) -> diteruskan ke API Tanova AI -> disimpan sebagai diagnosis.
+  app.post('/ai/analyze', {
+    onRequest: cameraOrUser,
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    // Skema hanya untuk dokumentasi Swagger (kotak unggah file); isi multipart divalidasi manual di bawah.
+    validatorCompiler: () => () => true,
+    schema: {
+      tags,
+      security: [{ bearerAuth: [] }, { cameraKey: [] }],
+      consumes: ['multipart/form-data', 'image/jpeg'],
+      summary: 'Analisis foto tanaman melalui layanan Tanova AI dan simpan hasilnya',
+      description:
+        'Kirim foto sebagai multipart/form-data (field "image") atau body mentah image/jpeg. Foto diteruskan ke layanan Tanova AI eksternal. ' +
+        'device_id (ID perangkat Tanova) boleh di query atau field form; wajib untuk kamera. ' +
+        'Autentikasi: header x-api-key (kamera) atau Bearer token (aplikasi). ' +
+        'Jika foto bukan tanaman atau terlalu gelap/buram, hasilnya tidak disimpan (saved: false).',
+      body: { type: 'object', properties: { image: { type: 'string', format: 'binary' }, device_id: { type: 'string' } } },
+      querystring: { type: 'object', properties: { device_id: { type: 'string' }, greenhouse_id: { type: 'string' } } },
+    },
+  }, async (request, reply) => {
+    let buffer;
+    let deviceId = request.query?.device_id;
+
+    if (request.isMultipart()) {
+      for await (const part of request.parts()) {
+        if (part.type === 'file') buffer = await part.toBuffer();
+        else if (part.fieldname === 'device_id') deviceId = part.value || deviceId;
+      }
+    } else if (Buffer.isBuffer(request.body)) {
+      buffer = request.body;
+    } else {
+      throw httpError(415, 'Kirim foto sebagai multipart/form-data (field "image") atau body mentah image/jpeg', 'UNSUPPORTED_MEDIA');
+    }
+    if (!buffer?.length) throw httpError(400, 'Foto kosong atau field "image" tidak ditemukan', 'VALIDATION_ERROR');
+    if (buffer.length > env.maxUploadMb * 1024 * 1024) throw httpError(413, `Ukuran gambar maksimal ${env.maxUploadMb} MB`, 'IMAGE_TOO_LARGE');
+    const mime = sniffMime(buffer);
+    if (!mime) throw httpError(415, 'Format gambar harus JPEG, PNG, atau WebP (file mungkin terpotong)', 'UNSUPPORTED_IMAGE');
+
+    let greenhouse_id;
+    let device;
+    if (request.isCamera) {
+      if (!deviceId) throw httpError(400, 'device_id wajib diisi untuk kamera', 'VALIDATION_ERROR');
+      device = await findDevice(deviceId, null);
+      greenhouse_id = device.greenhouse_id;
+    } else {
+      ({ greenhouse_id, device } = await resolveTarget(request, deviceId));
+    }
+
+    const { result, model, latency_ms, external_image_url } = await analyzePlantImage(buffer, mime);
+    if (!result.is_plant) {
+      return reply.send({
+        saved: false,
+        is_plant: false,
+        message: 'Foto tidak menampilkan tanaman yang bisa dianalisis (terlalu gelap, buram, atau bukan tanaman).',
+        model,
+        latency_ms,
       });
     }
-    await logActivity(request, { action: 'ai.diagnosis_create', entity: 'ai_diagnosis', entity_id: row.id, description: `Diagnosis AI: ${row.label}`, greenhouse_id });
-    return reply.code(201).send(diagnosisDto(row));
+
+    let image_url = null;
+    try {
+      image_url = await saveImage(buffer, mime);
+    } catch (err) {
+      request.log.warn({ err }, 'gagal menyimpan foto; diagnosis tetap disimpan tanpa foto');
+    }
+
+    const row = await createDiagnosis(request, {
+      greenhouse_id,
+      device,
+      category: result.category,
+      label: result.label,
+      confidence: result.confidence,
+      severity: result.severity,
+      recommendation: result.recommendations.length ? result.recommendations.join(' ') : result.summary || undefined,
+      recommended_actions: result.recommendations.length ? result.recommendations : undefined,
+      image_url: image_url || external_image_url,
+      details: { source: request.isCamera ? 'camera' : 'app', plant: result.plant, symptoms: result.symptoms, model, latency_ms, external_status: result.source_status, external_id: result.source_id, analysis_text: result.summary },
+    });
+    return reply.code(201).send({ saved: true, ...diagnosisDto(row) });
   });
 
   app.get('/ai/diagnoses', {

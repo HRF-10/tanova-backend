@@ -20,7 +20,7 @@ export function getLatestMetrics(device) {
     return Promise.resolve({ online: false, last_seen: null, sensor_online: null, device_mode: null, actuator_status: {}, metrics: emptyMetrics() });
   }
   return memo(`latest:${device.id}`, 3000, async () => {
-    const keys = [...METRIC_NAMES.map((n) => METRICS[n].tbKey), ...DEVICE_STATUS_KEYS, 'sensor_online', 'mode'];
+    const keys = [...METRIC_NAMES.map((n) => METRICS[n].tbKey), ...DEVICE_STATUS_KEYS, 'sensor_online', 'mode', 'system_status', 'wifi_connected', 'mqtt_connected', 'esp_ready'];
     const tb = tbFor(device);
     const [latest, attrs] = await Promise.all([
       tb.getLatest(device.tb_device_id, keys),
@@ -59,7 +59,8 @@ export function getLatestMetrics(device) {
     }
     for (const name of METRIC_NAMES) metrics[name].status = metricStatus(name, metrics[name].value);
 
-    const lastActivity = Number(attrs.lastActivityTime) || newest || null;
+    const telemetryNewest = Math.max(0, ...Object.values(latest).map((p) => Number(p?.ts) || 0));
+    const lastActivity = Number(attrs.lastActivityTime) || telemetryNewest || newest || null;
     // Status relay nyata dari perangkat (dosis berwaktu mati sendiri, jadi data ini lebih akurat daripada database)
     const actuator_status = {};
     for (const key of DEVICE_STATUS_KEYS) if (typeof latest[key]?.value === 'boolean') actuator_status[key] = latest[key].value;
@@ -69,6 +70,10 @@ export function getLatestMetrics(device) {
       last_seen: lastActivity ? new Date(lastActivity).toISOString() : null,
       // sensor_online=false berarti ESP sensor berhenti mengirim data ke Raspberry Pi (bukan Raspberry Pi yang offline)
       sensor_online: typeof latest.sensor_online?.value === 'boolean' ? latest.sensor_online.value : null,
+      system_status: typeof latest.system_status?.value === 'string' ? latest.system_status.value : null,
+      wifi_connected: typeof latest.wifi_connected?.value === 'boolean' ? latest.wifi_connected.value : null,
+      mqtt_connected: typeof latest.mqtt_connected?.value === 'boolean' ? latest.mqtt_connected.value : null,
+      esp_ready: typeof latest.esp_ready?.value === 'boolean' ? latest.esp_ready.value : null,
       device_mode: ['auto', 'manual'].includes(latest.mode?.value) ? latest.mode.value : null,
       actuator_status,
       metrics,
@@ -111,12 +116,22 @@ export async function getHistory(device, { metrics, startTs, endTs, interval, ag
 //   sensor_offline : Raspberry Pi terhubung, tetapi sensor tidak mengirim data
 //   connected      : semuanya terhubung
 export async function getConnectionStatus(device) {
-  const base = { online: false, sensor_online: null, last_seen: null };
+  const base = {
+    online: false, sensor_online: null, last_seen: null,
+    system_status: null, wifi_connected: null, mqtt_connected: null, esp_ready: null,
+  };
   if (!device.tb_device_id) return { status: 'not_configured', message: 'Device ID ThingsBoard belum diisi', ...base };
   try {
     const t = await getLatestMetrics(device);
-    const info = { online: t.online, sensor_online: t.sensor_online, last_seen: t.last_seen };
-    if (!t.online) return { status: 'offline', message: 'Perangkat offline: Raspberry Pi tidak terhubung ke ThingsBoard', ...info };
+    const info = {
+      online: t.online, sensor_online: t.sensor_online, last_seen: t.last_seen,
+      system_status: t.system_status, wifi_connected: t.wifi_connected,
+      mqtt_connected: t.mqtt_connected, esp_ready: t.esp_ready,
+    };
+    if (!t.online) return { status: 'offline', message: 'Perangkat tidak aktif di ThingsBoard', ...info };
+    if (t.wifi_connected === false || t.mqtt_connected === false || t.system_status === 'disconnected') {
+      return { status: 'connection_degraded', message: 'Perangkat terhubung sebagian; periksa Wi-Fi/MQTT', ...info };
+    }
     if (t.sensor_online === false) return { status: 'sensor_offline', message: 'Terhubung ke ThingsBoard, tetapi sensor tidak mengirim data', ...info };
     return { status: 'connected', message: 'Terhubung', ...info };
   } catch (err) {

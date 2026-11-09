@@ -331,6 +331,66 @@ export default async function deviceRoutes(app) {
     return deviceDto(await db('devices').where({ id: device.id }).first());
   });
 
+  // ---- Konfigurasi Wi-Fi untuk Arduino melalui ThingsBoard Shared Attributes ----
+  // Password hanya diteruskan ke ThingsBoard dan tidak disimpan/ditampilkan oleh API Tanova.
+  app.put('/devices/:id/wifi-config', {
+    onRequest: rw,
+    schema: {
+      tags, security, params: idParam,
+      summary: 'Kirim SSID dan password Wi-Fi ke Arduino melalui ThingsBoard',
+      description: 'Menulis wifi_ssid dan wifi_password ke Shared Attributes. Arduino mengambilnya melalui subscription/request shared attributes. Respons hanya mengonfirmasi bahwa konfigurasi berhasil ditulis ke ThingsBoard, bukan bahwa Wi-Fi perangkat sudah tersambung.',
+      body: {
+        type: 'object', additionalProperties: false,
+        required: ['ssid', 'password'],
+        properties: {
+          ssid: { type: 'string', minLength: 1, maxLength: 32 },
+          password: { type: 'string', minLength: 0, maxLength: 64 },
+        },
+      },
+    },
+  }, async (request) => {
+    const device = await findDevice(request.params.id, ghScope(request));
+    if (!device.tb_device_id) throw httpError(422, 'Perangkat belum memiliki tb_device_id (ThingsBoard)', 'NO_TB_DEVICE');
+    const attrs = { wifi_ssid: request.body.ssid, wifi_password: request.body.password };
+    await tbFor(device).setSharedAttributes(device.tb_device_id, attrs);
+    await logActivity(request, {
+      action: 'device.update_wifi_config', entity: 'device', entity_id: device.id,
+      description: `Mengirim konfigurasi Wi-Fi ke ThingsBoard untuk ${device.name}`,
+      meta: { wifi_ssid: request.body.ssid, password_sent: true },
+      greenhouse_id: device.greenhouse_id,
+    });
+    return {
+      saved: true,
+      delivered_to: 'thingsboard_shared_attributes',
+      device_received: null,
+      message: 'Konfigurasi berhasil ditulis ke ThingsBoard. Status koneksi perangkat akan terlihat setelah Arduino mengambil konfigurasi dan mengirim telemetry.',
+    };
+  });
+
+  app.get('/devices/:id/wifi-config', {
+    onRequest: ro,
+    schema: {
+      tags, security, params: idParam,
+      summary: 'Lihat status konfigurasi Wi-Fi tanpa membuka password',
+    },
+  }, async (request) => {
+    const device = await findDevice(request.params.id, ghScope(request));
+    if (!device.tb_device_id) throw httpError(422, 'Perangkat belum memiliki tb_device_id (ThingsBoard)', 'NO_TB_DEVICE');
+    const attrs = await tbFor(device).getAttributes(device.tb_device_id, ['wifi_ssid', 'wifi_password'], 'SHARED_SCOPE');
+    const status = await getConnectionStatus(device);
+    return {
+      configured: Boolean(attrs.wifi_ssid && attrs.wifi_password !== undefined),
+      ssid: attrs.wifi_ssid || null,
+      password_configured: attrs.wifi_password !== undefined,
+      connection: {
+        status: status.status,
+        wifi_connected: status.wifi_connected ?? null,
+        mqtt_connected: status.mqtt_connected ?? null,
+        last_seen: status.last_seen,
+      },
+    };
+  });
+
   // ---- Sensors ----
   app.post('/devices/:id/sensors', { onRequest: rw, schema: { tags, security, summary: 'Tambah sensor', params: idParam, body: sensorBody } },
     async (request, reply) => {

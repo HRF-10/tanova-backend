@@ -357,3 +357,16 @@ Peran pengguna: `admin` (semua akses), `operator` (kontrol dan kelola greenhouse
 - Ganti `CREDENTIAL_ENCRYPTION_KEY` sebelum ada pengguna yang menyimpan koneksi, dan simpan kuncinya dengan aman.
 - Ekspor atau backup database Supabase secara berkala. Tabel `devices` berisi password ThingsBoard terenkripsi.
 - Jangan menonaktifkan Row Level Security pada tabel. Tabel baru yang dibuat lewat migrasi juga harus mengaktifkannya (lihat `docs/PANDUAN-SUPABASE.md`).
+
+
+## Konfigurasi Wi-Fi Arduino melalui ThingsBoard
+
+Endpoint admin/operator:
+- `PUT /api/v1/devices/:id/wifi-config`
+- Body JSON: `{ "ssid": "NamaWiFi", "password": "password-wifi" }`
+- Backend menulis `wifi_ssid` dan `wifi_password` ke ThingsBoard `SHARED_SCOPE`.
+- `GET /api/v1/devices/:id/wifi-config` menampilkan SSID dan status konfigurasi tanpa mengembalikan password.
+
+Status dashboard membaca telemetry Arduino `system_status`, `wifi_connected`, `mqtt_connected`, dan `esp_ready` bila key tersebut dikirim perangkat.
+
+Catatan: respons PUT hanya memastikan atribut berhasil ditulis ke ThingsBoard. Keberhasilan Arduino menerima dan menyambungkan Wi-Fi harus dikonfirmasi melalui telemetry/status berikutnya. Gunakan koneksi ThingsBoard yang terenkripsi (HTTPS untuk REST dan MQTT over TLS) sebelum mengirim password Wi-Fi produksi.

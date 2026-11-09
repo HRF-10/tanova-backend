@@ -14,7 +14,7 @@ export const RPC = {
 };
 
 // Shared attribute yang ditulis backend. Service membacanya lewat topik v1/devices/me/attributes
-export const SHARED_ATTR = { mode: 'mode' }; // nilai: "manual" | "auto"
+export const SHARED_ATTR = { mode: 'mode', wifiSsid: 'wifi_ssid', wifiPassword: 'wifi_password' }; // nilai: "manual" | "auto"
 
 // Susun params RPC setActuator
 export function actuatorParams(controlKey, on, duration) {

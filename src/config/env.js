@@ -65,6 +65,22 @@ export const env = {
     intervalSec: int(process.env.ALERT_CHECK_INTERVAL_SEC, 30),
   },
 
+  // Tanova AI: analisis gambar melalui layanan Tanova AI eksternal
+  ai: {
+    imageApiUrl: (process.env.IMAGE_API_URL || '').replace(/\/+$/, ''),
+    imageApiKey: process.env.IMAGE_API_KEY || '',
+    timeoutMs: int(process.env.IMAGE_API_TIMEOUT_MS, 90000),
+    // Kunci yang dikirim ESP32-S3 CAM lewat header x-api-key. Kosong = kamera tidak bisa mengirim.
+    cameraApiKey: process.env.CAMERA_API_KEY || '',
+  },
+
+  // Opsional: simpan foto di Supabase Storage (bucket publik). Kosong = simpan di folder uploads/.
+  supabase: {
+    url: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
+    serviceKey: process.env.SUPABASE_SERVICE_KEY || '',
+    bucket: process.env.SUPABASE_BUCKET || 'tanova-images',
+  },
+
   uploadDir: process.env.UPLOAD_DIR || './uploads',
   maxUploadMb: int(process.env.MAX_UPLOAD_MB, 5),
 

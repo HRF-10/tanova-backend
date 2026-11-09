@@ -39,7 +39,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   await app.register(cors, {
     origin: env.corsOrigins.includes('*') ? true : env.corsOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
     exposedHeaders: ['Content-Disposition'],
   });
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
@@ -56,6 +56,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
       components: {
         securitySchemes: {
           bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          cameraKey: { type: 'apiKey', in: 'header', name: 'x-api-key', description: 'Kunci kamera ESP32 (CAMERA_API_KEY di .env)' },
         },
       },
     },
@@ -79,7 +80,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   app.get('/', { schema: { hide: true } }, async () => ({ name: 'Tanova App API', docs: '/docs', api: '/api/v1' }));
   app.get('/health', { schema: { tags: ['Health'], summary: 'Cek kesehatan layanan' } }, async () => {
     await db.raw('select 1');
-    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', time: new Date().toISOString() };
+    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', ai: env.ai.imageApiUrl ? 'tanovaai-external' : 'not_configured', time: new Date().toISOString() };
   });
 
   await app.register(async (api) => {
