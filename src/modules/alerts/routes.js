@@ -29,7 +29,7 @@ const ruleDto = (r) => dto(r);
 
 export default async function alertRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
+  const rw = [app.authenticate, app.requireRole('admin')];
 
   async function loadRule(id, scope) {
     const q = db('alert_rules').where({ id });
@@ -102,7 +102,7 @@ export default async function alertRoutes(app) {
   });
 
   // Jalankan pengecekan sekarang (berguna untuk demo/pengujian)
-  app.post('/alerts/evaluate', { onRequest: [app.authenticate, app.requireRole('admin', 'operator')], schema: { tags, security, summary: 'Jalankan pengecekan ambang batas sekarang' } }, async (request) =>
+  app.post('/alerts/evaluate', { onRequest: [app.authenticate, app.requireRole('admin')], schema: { tags, security, summary: 'Jalankan pengecekan ambang batas sekarang' } }, async (request) =>
     evaluateRulesOnce(request.log));
 
   // ---- Notifikasi (riwayat peringatan yang terpicu) ----

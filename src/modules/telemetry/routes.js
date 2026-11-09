@@ -19,6 +19,7 @@ const historyQuery = {
   required: ['device_id'],
   properties: {
     device_id: { type: 'string' },
+    greenhouse_id: { type: 'string' },
     metrics: { type: 'string', description: `Pisahkan dengan koma. Pilihan: ${METRIC_NAMES.join(', ')}. Default semua.` },
     from: { type: 'string', description: 'ISO 8601 atau epoch ms. Default 24 jam terakhir.' },
     to: { type: 'string', description: 'ISO 8601 atau epoch ms. Default sekarang.' },

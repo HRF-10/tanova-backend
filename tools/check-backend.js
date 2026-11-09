@@ -8,7 +8,7 @@
 // Pemakaian (backend dan simulator harus sudah berjalan):
 //   npm run check -- --device-id=<UUID device ThingsBoard> --tb-user=<email> --tb-pass=<password>
 // Pilihan lain:  --api=http://localhost:3000/api/v1  --tb-url=https://thingsboard.cloud
-//                --email=admin@tanova.local  --password=Admin12345!
+//                --username=admin  --password=Admin12345!
 // =====================================================================================
 const args = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => {
   const i = a.indexOf('=');
@@ -17,7 +17,7 @@ const args = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith
 const opt = (name, env, fallback) => args[name] ?? process.env[env] ?? fallback;
 
 const API = opt('api', 'CHECK_API_URL', 'http://localhost:3000/api/v1').replace(/\/$/, '');
-const EMAIL = opt('email', 'CHECK_EMAIL', 'admin@tanova.local');
+const USERNAME = opt('username', 'CHECK_USERNAME', 'admin');
 const PASSWORD = opt('password', 'CHECK_PASSWORD', 'Admin12345!');
 const TB_DEVICE_ID = opt('device-id', 'CHECK_TB_DEVICE_ID');
 const TB_USER = opt('tb-user', 'CHECK_TB_USER');
@@ -100,10 +100,10 @@ await step('Backend menjawab (/health)', async () => {
 }, { critical: true, hint: 'jalankan backend dengan npm run dev dan periksa alamat --api' });
 
 await step('Login admin', async () => {
-  const r = await call('POST', '/auth/login', { email: EMAIL, password: PASSWORD });
+  const r = await call('POST', '/auth/login', { username: USERNAME, password: PASSWORD });
   expect(r.status === 200, `status ${r.status}: ${r.body?.message}`);
   token = r.body.access_token;
-}, { critical: true, hint: 'periksa --email dan --password (bawaan seed: admin@tanova.local)' });
+}, { critical: true, hint: 'periksa --username dan --password (bawaan seed: admin)' });
 
 await step('Tes koneksi ThingsBoard (login akun + cek Device ID)', async () => {
   const r = await call('POST', '/devices/connection/test', { tb_device_id: TB_DEVICE_ID, tb_username: TB_USER, tb_password: TB_PASS, ...(TB_URL ? { tb_url: TB_URL } : {}) });

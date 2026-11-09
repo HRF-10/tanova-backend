@@ -15,7 +15,7 @@ const security = [{ bearerAuth: [] }];
 
 export default async function calibrationRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
+  const rw = [app.authenticate, app.requireRole('admin')];
 
   async function loadSensor(id, scope) {
     const q = db('sensors').join('devices', 'devices.id', 'sensors.device_id').where('sensors.id', id);

@@ -132,7 +132,7 @@ npm run dev              # atau: npm start
 ```
 
 - Dokumentasi interaktif semua endpoint: `http://localhost:3000/docs`
-- Login admin hasil seed: `admin@tanova.local` dengan password `Admin12345!`. Segera ganti.
+- Login admin hasil seed: username `admin` dengan password `Admin12345!` (kecuali diubah melalui `.env`). Segera ganti password setelah login.
 - Secara bawaan backend memakai **data simulasi** (`THINGSBOARD_MOCK=true`), jadi frontend bisa dikembangkan tanpa alat.
 - Untuk ThingsBoard asli, set `THINGSBOARD_MOCK=false`.
 
@@ -141,7 +141,7 @@ npm run dev              # atau: npm start
 Alurnya yang harus dibuat di aplikasi:
 
 1. Pengguna membuka form koneksi perangkat dan mengisi URL ThingsBoard (boleh kosong untuk memakai bawaan), email dan password ThingsBoard, serta Device ID.
-2. Tombol **Tes koneksi** memanggil `POST /api/v1/devices/connection/test`. Hasilnya `ok: true` atau `ok: false` dengan `stage` (`network`, `login`, atau `device`) dan pesan.
+2. Admin menekan tombol **Tes koneksi** yang memanggil `POST /api/v1/devices/connection/test`. Hasilnya `ok: true` atau `ok: false` dengan `stage` (`network`, `login`, atau `device`) dan pesan.
 3. Tombol **Simpan** memanggil `POST /api/v1/devices` (perangkat baru) atau `PUT /api/v1/devices/:id/connection` (perangkat yang sudah ada).
 4. Buka `GET /api/v1/dashboard/overview`. Jika `online: true` dan nilai sensor terisi, semuanya sudah tersambung.
 
@@ -290,11 +290,11 @@ B=http://localhost:3000/api/v1
 
 # login
 TOKEN=$(curl -s -X POST $B/auth/login -H 'content-type: application/json' \
-  -d '{"email":"admin@tanova.local","password":"Admin12345!"}' | jq -r .access_token)
+  -d '{"username":"admin","password":"Admin12345!"}' | jq -r .access_token)
 
 # daftarkan perangkat beserta koneksi ThingsBoard (aktuator dan sensor bawaan dibuat otomatis)
 curl -X POST $B/devices -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"name":"Tanova Grove 01","zone":"Zona A","tb_device_id":"UUID-DEVICE","tb_username":"email@thingsboard","tb_password":"password-thingsboard"}'
+  -d '{"name":"Tanova Grove 01","zone":"Zona A","greenhouse":{"name":"Greenhouse Demo","location":"Surakarta"},"tb_device_id":"UUID-DEVICE","tb_username":"email@thingsboard","tb_password":"password-thingsboard"}'
 
 # dashboard
 curl $B/dashboard/overview -H "authorization: Bearer $TOKEN"
@@ -313,8 +313,9 @@ Semua field JSON memakai `snake_case`. Format error seragam: `{ "statusCode": 40
 
 | Modul | Endpoint |
 | --- | --- |
-| Auth | `POST /auth/register`, `/auth/login`, `/auth/refresh`, `/auth/change-password` |
-| Profil | `GET/PATCH /users/me`, `PUT /users/me/greenhouse`, admin: `GET /users`, `PATCH /users/:id` |
+| Auth | `POST /auth/login`, `/auth/refresh`, `/auth/change-password` (tidak ada registrasi publik) |
+| Profil & akun | `GET /users/me`; admin: `GET/POST /users`, `GET/PATCH/DELETE /users/:id`, `PUT /users/:id/password`, `PUT /users/:id/greenhouses` |
+| Greenhouse | `GET /greenhouses`, `GET /greenhouses/:id`, admin: `POST/DELETE /greenhouses`, admin/pemilik: `PATCH /greenhouses/:id` |
 | Dashboard | `GET /dashboard/overview`, `GET /dashboard/stream` (SSE, token lewat `?token=`) |
 | Aktuator | `GET /actuators`, `POST /actuators/:id/control` |
 | Koneksi ThingsBoard | `POST /devices/connection/test`, `POST /devices/:id/connection/test`, `PUT /devices/:id/connection` |
@@ -326,7 +327,7 @@ Semua field JSON memakai `snake_case`. Format error seragam: `{ "statusCode": 40
 | Peringatan | `GET/POST /alerts/rules`, `PATCH/DELETE /alerts/rules/:id`, `GET /alerts/notifications`, `GET /alerts/notifications/unread-count`, `PATCH /alerts/notifications/:id/read`, `POST /alerts/notifications/read-all` |
 | Tanova AI | `GET/POST /ai/diagnoses`, `GET /ai/diagnoses/:id`, `PATCH /ai/diagnoses/:id/action`, `GET /ai/recommendations`, `GET/POST /ai/growth`, `GET /ai/prediction` |
 
-Peran pengguna: `admin` (semua akses), `operator` (kontrol dan kelola greenhouse miliknya), `viewer` (hanya melihat). Registrasi selalu membuat `operator`. Data dipisah per greenhouse.
+Peran: `admin` (akses global dan pengelolaan), `operator` (user yang dapat monitoring, konfigurasi Wi-Fi, serta kontrol aktuator), `viewer` (monitoring dan konfigurasi Wi-Fi tanpa kontrol aktuator). Akun hanya dibuat admin. Satu akun user dapat memiliki beberapa greenhouse; satu greenhouse hanya dapat ditetapkan kepada satu akun. Untuk memilih greenhouse tertentu, kirim query `?greenhouse_id=<ID>` pada endpoint yang mendukungnya. Admin mengakses semua greenhouse secara default.
 
 ## 7. Jika ada masalah
 

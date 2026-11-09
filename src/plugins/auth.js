@@ -25,8 +25,9 @@ export default fp(async (app) => {
       throw httpError(401, 'Token tidak valid atau sudah kedaluwarsa', 'UNAUTHORIZED');
     }
     const user = await db('users').where({ id: request.user.sub }).first();
-    if (!user || !user.is_active) throw httpError(401, 'Akun tidak ditemukan atau nonaktif', 'UNAUTHORIZED');
-    request.auth = user;
+    if (!user || !user.is_active || Number(request.user.ver ?? 0) !== Number(user.token_version ?? 0)) throw httpError(401, 'Token tidak berlaku. Silakan login kembali.', 'UNAUTHORIZED');
+    const assignments = await db('user_greenhouses').where({ user_id: user.id }).pluck('greenhouse_id').catch(() => []);
+    request.auth = { ...user, greenhouse_ids: assignments.length ? assignments : (user.greenhouse_id ? [user.greenhouse_id] : []) };
   });
 
   app.decorate('requireRole', (...roles) => async (request) => {
@@ -36,11 +37,11 @@ export default fp(async (app) => {
   });
 
   app.decorate('issueTokens', (user) => {
-    const payload = { sub: user.id, role: user.role };
+    const payload = { sub: user.id, role: user.role, ver: Number(user.token_version ?? 0) };
     return {
       token_type: 'Bearer',
       access_token: app.jwt.sign(payload),
-      refresh_token: app.jwt.refresh.sign({ sub: user.id }),
+      refresh_token: app.jwt.refresh.sign(payload),
       expires_in: env.jwt.accessExpires,
     };
   });

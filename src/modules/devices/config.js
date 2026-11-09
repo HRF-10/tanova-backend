@@ -33,7 +33,7 @@ function checkOrder(merged, low, high, message) {
 
 export default async function deviceConfigRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
+  const rw = [app.authenticate, app.requireRole('admin')];
 
   async function currentConfig(device) {
     if (!device.tb_device_id) return null;

@@ -14,7 +14,7 @@ import { findDevice } from '../../lib/devices.js';
 import { ghScope } from '../../lib/scope.js';
 import { logActivity } from '../../lib/activity.js';
 import { recommend } from '../../services/recommendations.js';
-import { analyzePlantImage } from '../../services/tanovaAi.js';
+import { analyzePlantImage } from '../../services/gemini.js';
 import { saveImage, sniffMime } from '../../services/imageStore.js';
 
 const tags = ['Tanova AI'];
@@ -168,7 +168,7 @@ export default async function aiRoutes(app) {
     return reply.code(201).send(diagnosisDto(row));
   });
 
-  // Foto dari kamera (atau aplikasi) -> diteruskan ke API Tanova AI -> disimpan sebagai diagnosis.
+  // Foto dari kamera (atau aplikasi) -> dianalisis Gemini di backend -> disimpan sebagai diagnosis.
   app.post('/ai/analyze', {
     onRequest: cameraOrUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
@@ -178,9 +178,9 @@ export default async function aiRoutes(app) {
       tags,
       security: [{ bearerAuth: [] }, { cameraKey: [] }],
       consumes: ['multipart/form-data', 'image/jpeg'],
-      summary: 'Analisis foto tanaman melalui layanan Tanova AI dan simpan hasilnya',
+      summary: 'Analisis foto tanaman dengan AI (Gemini) dan simpan hasilnya',
       description:
-        'Kirim foto sebagai multipart/form-data (field "image") atau body mentah image/jpeg. Foto diteruskan ke layanan Tanova AI eksternal. ' +
+        'Kirim foto sebagai multipart/form-data (field "image") atau body mentah image/jpeg. ' +
         'device_id (ID perangkat Tanova) boleh di query atau field form; wajib untuk kamera. ' +
         'Autentikasi: header x-api-key (kamera) atau Bearer token (aplikasi). ' +
         'Jika foto bukan tanaman atau terlalu gelap/buram, hasilnya tidak disimpan (saved: false).',
@@ -216,7 +216,7 @@ export default async function aiRoutes(app) {
       ({ greenhouse_id, device } = await resolveTarget(request, deviceId));
     }
 
-    const { result, model, latency_ms, external_image_url } = await analyzePlantImage(buffer, mime);
+    const { result, model, latency_ms } = await analyzePlantImage(buffer, mime);
     if (!result.is_plant) {
       return reply.send({
         saved: false,
@@ -241,10 +241,10 @@ export default async function aiRoutes(app) {
       label: result.label,
       confidence: result.confidence,
       severity: result.severity,
-      recommendation: result.recommendations.length ? result.recommendations.join(' ') : result.summary || undefined,
+      recommendation: result.summary || undefined,
       recommended_actions: result.recommendations.length ? result.recommendations : undefined,
-      image_url: image_url || external_image_url,
-      details: { source: request.isCamera ? 'camera' : 'app', plant: result.plant, symptoms: result.symptoms, model, latency_ms, external_status: result.source_status, external_id: result.source_id, analysis_text: result.summary },
+      image_url,
+      details: { source: request.isCamera ? 'camera' : 'app', plant: result.plant, symptoms: result.symptoms, model, latency_ms },
     });
     return reply.code(201).send({ saved: true, ...diagnosisDto(row) });
   });

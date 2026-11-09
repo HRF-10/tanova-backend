@@ -19,9 +19,10 @@ try {
       id: ghId, name: 'Tanova Grove Demo', location: 'Surakarta, Jawa Tengah', plant_type: 'Selada hidroponik', area_m2: 24,
       description: 'Greenhouse contoh untuk pengembangan', created_at: t, updated_at: t,
     });
+    const adminId = newId();
     await db('users').insert({
-      id: newId(), greenhouse_id: ghId, name: 'Admin Tanova', email, job_title: 'Administrator', role: 'admin',
-      password_hash: await bcrypt.hash(env.seed.adminPassword, 10), is_active: true, created_at: t, updated_at: t,
+      id: adminId, greenhouse_id: null, name: 'Admin Tanova', username: env.seed.adminUsername, email, job_title: 'Administrator', role: 'admin',
+      password_hash: await bcrypt.hash(env.seed.adminPassword, 12), is_active: true, created_at: t, updated_at: t,
     });
 
     const deviceId = newId();
@@ -66,7 +67,7 @@ try {
         action_status: 'pending', created_at: t,
       };
     }));
-    console.log(`Seed selesai.\nAdmin  : ${email}\nPassword: ${env.seed.adminPassword}\n(Segera ganti password setelah login.)`);
+    console.log(`Seed selesai.\nUsername: ${env.seed.adminUsername}\nEmail  : ${email}\nPassword: ${env.seed.adminPassword}\n(Segera ganti password setelah login.)`);
   }
 } finally {
   await db.destroy();

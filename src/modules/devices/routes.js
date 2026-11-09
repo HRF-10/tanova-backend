@@ -15,7 +15,7 @@ import { METRICS } from '../../config/metrics.js';
 
 const tags = ['Devices'];
 const security = [{ bearerAuth: [] }];
-const SENSOR_TYPES = ['ph', 'ec', 'tds', 'water_temp', 'tank_level', 'other'];
+const SENSOR_TYPES = ['ph', 'ec', 'tds', 'water_temp', 'air_temp', 'humidity', 'waterflow', 'tank_level', 'other'];
 const ACTUATOR_TYPES = ['pump', 'dosing_pump', 'valve', 'fan', 'heater', 'light', 'other'];
 const idParam = { type: 'object', properties: { id: { type: 'string' } } };
 
@@ -108,7 +108,8 @@ export const actuatorDto = (r) => dto(r);
 
 export default async function deviceRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
+  const rw = [app.authenticate, app.requireRole('admin')];
+  const wifiWrite = [app.authenticate, app.requireRole('admin', 'operator', 'viewer')];
 
   async function loadChildren(deviceIds) {
     const [sensors, actuators] = await Promise.all([
@@ -188,21 +189,25 @@ export default async function deviceRoutes(app) {
           config: { type: 'object' },
           notes: { type: 'string', maxLength: 1000 },
           greenhouse_id: { type: 'string' },
+          greenhouse: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string', minLength: 2, maxLength: 150 }, location: { type: 'string', maxLength: 255 }, plant_type: { type: 'string', maxLength: 100 }, area_m2: { type: 'number', minimum: 0 }, description: { type: 'string', maxLength: 1000 } } },
           sensors: { type: 'array', items: sensorBody, maxItems: 20 },
           actuators: { type: 'array', items: actuatorBody, maxItems: 20 },
         },
       },
     },
   }, async (request, reply) => {
-    const { sensors = DEFAULT_SENSORS, actuators = DEFAULT_ACTUATORS, config, greenhouse_id: _g, ...restBody } = request.body;
+    const { sensors = DEFAULT_SENSORS, actuators = DEFAULT_ACTUATORS, config, greenhouse: newGreenhouse, greenhouse_id: requestedGreenhouseId, ...restBody } = request.body;
     const rest = applyCredentials(restBody);
-    const greenhouse_id = ghRequired(request);
+    if (newGreenhouse && request.auth.role !== 'admin') throw httpError(403, 'Hanya admin yang dapat membuat greenhouse', 'FORBIDDEN');
+    const greenhouse_id = newGreenhouse ? newId() : ghRequired(request);
     const keys = actuators.map((a) => a.control_key);
     if (new Set(keys).size !== keys.length) throw httpError(400, 'control_key aktuator harus unik', 'DUPLICATE_CONTROL_KEY');
 
     const t = now();
     const id = newId();
     await db.transaction(async (trx) => {
+      if (newGreenhouse) await trx('greenhouses').insert({ id: greenhouse_id, ...newGreenhouse, created_at: t, updated_at: t });
+      else if (!(await trx('greenhouses').where({ id: greenhouse_id }).first())) throw httpError(404, 'Greenhouse tidak ditemukan', 'GREENHOUSE_NOT_FOUND');
       await trx('devices').insert({ id, greenhouse_id, ...rest, config: toJson(config), created_at: t, updated_at: t });
       if (sensors.length) await trx('sensors').insert(sensors.map((s) => sensorRow(id, s, t)));
       if (actuators.length) await trx('actuators').insert(actuators.map((a) => actuatorRow(id, a, t)));
@@ -285,7 +290,7 @@ export default async function deviceRoutes(app) {
   }
 
   app.post('/devices/connection/test', {
-    onRequest: rw,
+    onRequest: [app.authenticate, app.requireRole('admin')],
     schema: {
       tags, security, summary: 'Tes koneksi ThingsBoard sebelum disimpan (login + cek device ID)',
       body: {
@@ -298,7 +303,7 @@ export default async function deviceRoutes(app) {
     return testConnection({ url: b.tb_url || undefined, username: b.tb_username, password: b.tb_password, device_id: b.tb_device_id });
   });
 
-  app.post('/devices/:id/connection/test', { onRequest: rw, schema: { tags, security, summary: 'Tes koneksi ThingsBoard dengan data yang tersimpan', params: idParam } }, async (request) => {
+  app.post('/devices/:id/connection/test', { onRequest: [app.authenticate, app.requireRole('admin')], schema: { tags, security, summary: 'Tes koneksi ThingsBoard dengan data yang tersimpan', params: idParam } }, async (request) => {
     const device = await findDevice(request.params.id, ghScope(request));
     if (!device.tb_device_id) return { ok: false, stage: 'device', code: 'NO_TB_DEVICE', message: 'Device ID ThingsBoard belum diisi' };
     try {
@@ -334,7 +339,7 @@ export default async function deviceRoutes(app) {
   // ---- Konfigurasi Wi-Fi untuk Arduino melalui ThingsBoard Shared Attributes ----
   // Password hanya diteruskan ke ThingsBoard dan tidak disimpan/ditampilkan oleh API Tanova.
   app.put('/devices/:id/wifi-config', {
-    onRequest: rw,
+    onRequest: wifiWrite,
     schema: {
       tags, security, params: idParam,
       summary: 'Kirim SSID dan password Wi-Fi ke Arduino melalui ThingsBoard',

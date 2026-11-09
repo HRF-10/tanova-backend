@@ -65,11 +65,12 @@ export const env = {
     intervalSec: int(process.env.ALERT_CHECK_INTERVAL_SEC, 30),
   },
 
-  // Tanova AI: analisis gambar melalui layanan Tanova AI eksternal
+  // Tanova AI: foto dari kamera diproses di backend memakai Gemini
   ai: {
-    imageApiUrl: (process.env.IMAGE_API_URL || '').replace(/\/+$/, ''),
-    imageApiKey: process.env.IMAGE_API_KEY || '',
-    timeoutMs: int(process.env.IMAGE_API_TIMEOUT_MS, 90000),
+    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    // Nama model persis seperti id di API Gemini (huruf kecil, pakai tanda hubung)
+    model: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+    timeoutMs: int(process.env.GEMINI_TIMEOUT_MS, 30000),
     // Kunci yang dikirim ESP32-S3 CAM lewat header x-api-key. Kosong = kamera tidak bisa mengirim.
     cameraApiKey: process.env.CAMERA_API_KEY || '',
   },
@@ -86,6 +87,7 @@ export const env = {
 
   seed: {
     adminEmail: process.env.SEED_ADMIN_EMAIL || 'admin@tanova.local',
+    adminUsername: (process.env.SEED_ADMIN_USERNAME || 'admin').toLowerCase(),
     adminPassword: process.env.SEED_ADMIN_PASSWORD || 'Admin12345!',
   },
 };

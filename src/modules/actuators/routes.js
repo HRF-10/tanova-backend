@@ -14,7 +14,7 @@ const security = [{ bearerAuth: [] }];
 
 export default async function actuatorRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
+  const rw = [app.authenticate, app.requireRole('admin', 'operator')]; // operator = user yang diberi izin kontrol; viewer hanya baca
 
   app.get('/actuators', {
     onRequest: ro,

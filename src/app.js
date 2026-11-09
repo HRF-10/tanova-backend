@@ -13,6 +13,7 @@ import { db, migrateLatest } from './db/knex.js';
 import authPlugin from './plugins/auth.js';
 import authRoutes from './modules/auth/routes.js';
 import userRoutes from './modules/users/routes.js';
+import greenhouseRoutes from './modules/greenhouses/routes.js';
 import dashboardRoutes from './modules/dashboard/routes.js';
 import deviceRoutes from './modules/devices/routes.js';
 import deviceConfigRoutes from './modules/devices/config.js';
@@ -80,12 +81,13 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   app.get('/', { schema: { hide: true } }, async () => ({ name: 'Tanova App API', docs: '/docs', api: '/api/v1' }));
   app.get('/health', { schema: { tags: ['Health'], summary: 'Cek kesehatan layanan' } }, async () => {
     await db.raw('select 1');
-    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', ai: env.ai.imageApiUrl ? 'tanovaai-external' : 'not_configured', time: new Date().toISOString() };
+    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', ai: env.ai.geminiApiKey ? env.ai.model : 'not_configured', time: new Date().toISOString() };
   });
 
   await app.register(async (api) => {
     await api.register(authRoutes);
     await api.register(userRoutes);
+    await api.register(greenhouseRoutes);
     await api.register(dashboardRoutes);
     await api.register(deviceRoutes);
     await api.register(deviceConfigRoutes);
