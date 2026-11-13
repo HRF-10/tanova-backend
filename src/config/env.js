@@ -67,12 +67,21 @@ export const env = {
 
   // Tanova AI: foto dari kamera diproses di backend memakai Gemini
   ai: {
+    // geminiApiKey: process.env.GEMINI_API_KEY || '',
+    // // Nama model persis seperti id di API Gemini (huruf kecil, pakai tanda hubung)
+    // model: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+    // timeoutMs: int(process.env.GEMINI_TIMEOUT_MS, 30000),
+    // // Kunci yang dikirim ESP32-S3 CAM lewat header x-api-key. Kosong = kamera tidak bisa mengirim.
+    // cameraApiKey: process.env.CAMERA_API_KEY || '',
+    // serviceUrl: (process.env.TANOVAAI_URL || '').replace(/\/+$/, ''),
+    // serviceApiKey: process.env.TANOVAAI_API_KEY || '',
+    // serviceTimeoutMs: int(process.env.TANOVAAI_TIMEOUT_MS, 60000),
     geminiApiKey: process.env.GEMINI_API_KEY || '',
-    // Nama model persis seperti id di API Gemini (huruf kecil, pakai tanda hubung)
     model: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
     timeoutMs: int(process.env.GEMINI_TIMEOUT_MS, 30000),
-    // Kunci yang dikirim ESP32-S3 CAM lewat header x-api-key. Kosong = kamera tidak bisa mengirim.
     cameraApiKey: process.env.CAMERA_API_KEY || '',
+
+    // Layanan Tanova AI eksternal
     serviceUrl: (process.env.TANOVAAI_URL || '').replace(/\/+$/, ''),
     serviceApiKey: process.env.TANOVAAI_API_KEY || '',
     serviceTimeoutMs: int(process.env.TANOVAAI_TIMEOUT_MS, 60000),
