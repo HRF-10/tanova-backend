@@ -50,6 +50,9 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   fs.mkdirSync(uploadRoot, { recursive: true });
   await app.register(fastifyStatic, { root: uploadRoot, prefix: '/uploads/' });
 
+  const consoleRoot = path.resolve('public');
+  await app.register(fastifyStatic, { root: consoleRoot, prefix: '/console-assets/', decorateReply: false });
+
   await app.register(swagger, {
     openapi: {
       info: { title: 'Tanova App API', description: 'Backend monitoring hidroponik (Fastify + ThingsBoard). Semua field memakai snake_case.', version: '1.0.0' },
@@ -78,10 +81,11 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   app.setNotFoundHandler((request, reply) =>
     reply.status(404).send({ statusCode: 404, code: 'NOT_FOUND', message: `Rute ${request.method} ${request.url} tidak ditemukan` }));
 
-  app.get('/', { schema: { hide: true } }, async () => ({ name: 'Tanova App API', docs: '/docs', api: '/api/v1' }));
+  app.get('/', { schema: { hide: true } }, async () => ({ name: 'Tanova App API', docs: '/docs', console: '/console', api: '/api/v1' }));
+  app.get('/console', { schema: { hide: true } }, async (_request, reply) => reply.sendFile('index.html', consoleRoot));
   app.get('/health', { schema: { tags: ['Health'], summary: 'Cek kesehatan layanan' } }, async () => {
     await db.raw('select 1');
-    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', ai: env.ai.geminiApiKey ? env.ai.model : 'not_configured', time: new Date().toISOString() };
+    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', ai: env.ai.serviceUrl && env.ai.serviceApiKey ? 'external_service_configured' : 'not_configured', time: new Date().toISOString() };
   });
 
   await app.register(async (api) => {
