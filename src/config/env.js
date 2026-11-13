@@ -73,6 +73,9 @@ export const env = {
     timeoutMs: int(process.env.GEMINI_TIMEOUT_MS, 30000),
     // Kunci yang dikirim ESP32-S3 CAM lewat header x-api-key. Kosong = kamera tidak bisa mengirim.
     cameraApiKey: process.env.CAMERA_API_KEY || '',
+    serviceUrl: (process.env.TANOVAAI_URL || '').replace(/\/+$/, ''),
+    serviceApiKey: process.env.TANOVAAI_API_KEY || '',
+    serviceTimeoutMs: int(process.env.TANOVAAI_TIMEOUT_MS, 60000),
   },
 
   // Opsional: simpan foto di Supabase Storage (bucket publik). Kosong = simpan di folder uploads/.
