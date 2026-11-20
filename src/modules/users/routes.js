@@ -20,7 +20,52 @@ export default async function userRoutes(app) {
 
   app.get('/users/me', { onRequest: auth, schema: { tags, security, summary: 'Profil akun dan greenhouse yang ditetapkan' } }, async (request) => userWithGreenhouse(request.auth));
 
-  // Identitas akun dikelola admin; user hanya dapat mengganti password sendiri.
+  // Pengguna dapat memperbarui identitas profil sendiri. Perubahan dilindungi password saat ini.
+  app.patch('/users/me', {
+    onRequest: auth,
+    schema: {
+      tags, security, summary: 'Ubah profil akun sendiri',
+      body: { type: 'object', additionalProperties: false, minProperties: 2, required: ['current_password'], properties: {
+        current_password: { type: 'string', minLength: 1, maxLength: 72 },
+        name: { type: 'string', minLength: 2, maxLength: 100 },
+        username: usernameSchema,
+        email: { type: 'string', format: 'email', maxLength: 190 },
+        phone: { type: ['string', 'null'], maxLength: 30 },
+      } },
+    },
+  }, async (request) => {
+    const { current_password, ...input } = request.body;
+    if (!Object.keys(input).length) throw httpError(400, 'Tidak ada data profil yang diubah', 'EMPTY_PROFILE_UPDATE');
+    if (!(await bcrypt.compare(current_password, request.auth.password_hash))) {
+      throw httpError(400, 'Password saat ini salah', 'WRONG_PASSWORD');
+    }
+
+    const patch = { updated_at: now() };
+    if (input.name !== undefined) patch.name = input.name.trim();
+    if (input.phone !== undefined) patch.phone = input.phone?.trim() || null;
+    if (input.username !== undefined) {
+      patch.username = input.username.trim().toLowerCase();
+      if (await db('users').whereRaw('LOWER(username) = ?', [patch.username]).whereNot({ id: request.auth.id }).first()) {
+        throw httpError(409, 'Username sudah digunakan', 'USERNAME_TAKEN');
+      }
+    }
+    if (input.email !== undefined) {
+      patch.email = input.email.trim().toLowerCase();
+      if (await db('users').whereRaw('LOWER(email) = ?', [patch.email]).whereNot({ id: request.auth.id }).first()) {
+        throw httpError(409, 'Email sudah digunakan', 'EMAIL_TAKEN');
+      }
+    }
+
+    await db('users').where({ id: request.auth.id }).update(patch);
+    await logActivity(request, {
+      action: 'user.profile_update', entity: 'user', entity_id: request.auth.id,
+      description: `Pengguna memperbarui profil ${request.auth.username}`,
+      meta: { fields: Object.keys(input) },
+    });
+    return userWithGreenhouse(await db('users').where({ id: request.auth.id }).first());
+  });
+
+  // Admin tetap dapat mengelola akun lain melalui endpoint di bawah.
   app.get('/users', {
     onRequest: admin,
     schema: { tags, security, summary: 'Daftar akun (admin)', querystring: { type: 'object', properties: { page: { type: 'integer' }, limit: { type: 'integer' }, q: { type: 'string' } } } },

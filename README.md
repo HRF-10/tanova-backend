@@ -313,8 +313,18 @@ Semua field JSON memakai `snake_case`. Format error seragam: `{ "statusCode": 40
 
 | Modul | Endpoint |
 | --- | --- |
-| Auth | `POST /auth/login`, `/auth/refresh`, `/auth/change-password` (tidak ada registrasi publik) |
-| Profil & akun | `GET /users/me`; admin: `GET/POST /users`, `GET/PATCH/DELETE /users/:id`, `PUT /users/:id/password`, `PUT /users/:id/greenhouses` |
+| Auth | `POST /auth/login`, `/auth/refresh`, `/auth/change-password`, `/auth/forgot-password`, `/auth/reset-password` (tidak ada registrasi publik) |
+| Profil & akun | `GET/PATCH /users/me` (profil sendiri); admin: `GET/POST /users`, `GET/PATCH/DELETE /users/:id`, `PUT /users/:id/password`, `PUT /users/:id/greenhouses` |
+
+### Profil dan pemulihan password
+
+- `PATCH /api/v1/users/me` membutuhkan Bearer token dan `current_password`, lalu menerima salah satu atau beberapa field `name`, `username`, `email`, `phone`.
+- `POST /api/v1/auth/forgot-password` menerima `{ "email": "akun@example.com" }`. Respons selalu generik agar tidak membocorkan apakah email terdaftar.
+- `POST /api/v1/auth/reset-password` menerima `{ "token": "token-dari-email", "new_password": "password-baru-minimal-8-karakter" }`.
+- Token reset berlaku 30 menit, hanya dapat digunakan sekali, disimpan sebagai hash, dan reset password membatalkan sesi/token login lama.
+- Pengiriman email memakai Resend. Atur `EMAIL_API_KEY`, `EMAIL_FROM`, dan `FRONTEND_URL` pada environment backend. `EMAIL_FROM` harus memakai domain pengirim yang sudah diverifikasi di Resend; `FRONTEND_URL` adalah alamat frontend yang memiliki halaman `/reset-password`.
+- Pada development, bila email belum dikonfigurasi, endpoint forgot-password dapat mengembalikan `debug_reset_token` untuk pengujian lokal. Token debug tidak pernah dikembalikan di production.
+
 | Greenhouse | `GET /greenhouses`, `GET /greenhouses/:id`, admin: `POST/DELETE /greenhouses`, admin/pemilik: `PATCH /greenhouses/:id` |
 | Dashboard | `GET /dashboard/overview`, `GET /dashboard/stream` (SSE, token lewat `?token=`) |
 | Aktuator | `GET /actuators`, `POST /actuators/:id/control` |

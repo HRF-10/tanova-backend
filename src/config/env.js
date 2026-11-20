@@ -97,6 +97,12 @@ export const env = {
   uploadDir: process.env.UPLOAD_DIR || './uploads',
   maxUploadMb: int(process.env.MAX_UPLOAD_MB, 5),
 
+  email: {
+    apiKey: process.env.EMAIL_API_KEY || '',
+    from: process.env.EMAIL_FROM || '',
+    frontendUrl: (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, ''),
+  },
+
   seed: {
     adminEmail: process.env.SEED_ADMIN_EMAIL || 'admin@tanova.local',
     adminUsername: (process.env.SEED_ADMIN_USERNAME || 'admin').toLowerCase(),
