@@ -6,3 +6,4 @@ uploads/*
 !uploads/.gitkeep
 *.log
 .md
+simulator/calibration-state.json

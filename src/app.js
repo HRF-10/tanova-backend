@@ -85,7 +85,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   app.get('/console', { schema: { hide: true } }, async (_request, reply) => reply.sendFile('index.html', consoleRoot));
   app.get('/health', { schema: { tags: ['Health'], summary: 'Cek kesehatan layanan' } }, async () => {
     await db.raw('select 1');
-    return { status: 'ok', database: 'postgres', thingsboard: env.tb.mock ? 'mock' : 'live', ai: env.ai.serviceUrl && env.ai.serviceApiKey ? 'external_service_configured' : 'not_configured', time: new Date().toISOString() };
+    return { status: 'ok', service: 'tanova-backend', database: 'ok', thingsboard: env.tb.mock ? 'mock' : 'live', gemini: env.ai.geminiApiKey ? 'configured; check /api/v1/ai/provider-health for live model access' : 'not_configured', time: new Date().toISOString() };
   });
 
   await app.register(async (api) => {

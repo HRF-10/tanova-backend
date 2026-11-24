@@ -134,3 +134,10 @@ Sama seperti A, tetapi `THINGSBOARD_MOCK=false` dan `TB_URL=https://thingsboard.
 | Password ThingsBoard yang tersimpan tidak terbaca | `CREDENTIAL_ENCRYPTION_KEY` diganti | Pengguna mengisi ulang koneksi |
 | Galat CORS di browser | `CORS_ORIGIN` tidak cocok | Samakan dengan alamat frontend |
 | Perubahan `.env` tidak berpengaruh | Backend belum dijalankan ulang | Hentikan lalu jalankan lagi |
+
+
+## Pemeriksaan health
+
+- `GET /health` (tanpa prefix) = health backend TANOVA + koneksi database.
+- `GET /api/v1/ai/provider-health` (Bearer token) = memeriksa API key dan akses model Gemini melalui endpoint metadata model (tanpa menjalankan analisis gambar).
+- `GET /api/v1/ai/provider-logs` (Bearer token) = riwayat diagnosis Gemini yang tersimpan di database TANOVA; Gemini API tidak menyediakan endpoint `/api/logs` seperti provider eksternal.

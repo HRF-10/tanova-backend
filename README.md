@@ -19,7 +19,7 @@ Aplikasi (frontend) <--REST/SSE--> Backend Fastify <--REST API--> ThingsBoard <-
 - **Perintah dan pengaturan** mengalir ke kanan: aplikasi, backend, ThingsBoard, Raspberry Pi, Wemos, relay.
 - Backend tidak bicara langsung dengan Raspberry Pi. Semuanya lewat ThingsBoard, jadi alat boleh berada di jaringan mana pun.
 - **Akun dan Device ID ThingsBoard diisi pengguna sendiri dari GUI aplikasi** (per perangkat), bukan di file `.env` backend.
-- **Saat ini service asli belum dipakai.** Peran Raspberry Pi digantikan oleh **simulator** (folder `simulator`) yang mengikuti kontrak di `docs/KONTRAK-SERVICE.md`. Backend tidak berubah saat service asli nanti dipasang, yang disesuaikan adalah service-nya.
+- **Saat ini service asli belum dipakai.** Peran perangkat digantikan oleh **simulator Tanova Grove 1** (folder `simulator`) yang mengikuti kontrak di `docs/KONTRAK-SERVICE.md`. Data sensor dan efek aktuatornya bersifat simulasi, bukan pembacaan atau kendali hardware sungguhan. Backend tidak berubah saat service asli nanti dipasang, yang disesuaikan adalah service-nya.
 - **Pemrosesan AI dilakukan di aplikasi.** Backend hanya menyimpan hasil diagnosis dan foto. Kamera ESP32-S3 CAM tidak ada di `service_1.py`.
 
 Ada dua jenis alamat ThingsBoard yang berbeda, dan ini sering tertukar:
@@ -171,7 +171,7 @@ npm run check -- --device-id=<Device ID> --tb-user=<email ThingsBoard> --tb-pass
 
 Bagian di bawah ini adalah ringkasannya.
 
-Simulator berperan sebagai Raspberry Pi: terhubung ke ThingsBoard lewat MQTT, mengirim telemetri, menerima perintah, dan membalas persis seperti kontrak. Nama variabel `.env`-nya sama dengan service asli.
+Simulator Tanova Grove 1 berperan sebagai perangkat pengganti Raspberry Pi: terhubung ke ThingsBoard lewat MQTT, mengirim telemetri, menerima perintah, menjalankan logika aktuator/kendali otomatis simulasi, dan membalas sesuai kontrak backend. Nama variabel `.env`-nya sama dengan service asli.
 
 **Opsi 1. Dengan ThingsBoard sungguhan**
 
@@ -273,49 +273,17 @@ Backend mengecek aturan ambang batas tiap `ALERT_CHECK_INTERVAL_SEC` detik. Jika
 - Metrik yang bisa dipakai: `ph`, `ec`, `tds`, `water_temp`, `air_temp`, `humidity`, `waterflow`, `tank_level`.
 - Aplikasi membaca notifikasi lewat `GET /alerts/notifications` dan jumlah yang belum dibaca lewat `/alerts/notifications/unread-count`.
 
-### Tanova AI
+### Analisis gambar Gemini AI
 
-Pemrosesan AI dilakukan di **sisi aplikasi**. Backend tidak menjalankan model dan tidak menerima kiriman dari Raspberry Pi atau layanan lain tanpa login.
+Analisis foto tanaman dijalankan langsung oleh backend melalui Gemini API (satu-satunya provider AI). Backend menyimpan foto ke `UPLOAD_DIR` atau Supabase Storage, lalu mengirim gambar ke Gemini memakai `GEMINI_API_KEY`.
 
-- Aplikasi mengirim hasil diagnosis ke `POST /ai/diagnoses` memakai login pengguna. Bisa JSON, atau multipart dengan field `image` untuk foto (JPEG, PNG, WebP, maksimal 5 MB).
-- Kamera ESP32-S3 CAM terpisah dari Raspberry Pi. Cara aplikasi mengambil foto dari kamera itu berada di sisi aplikasi.
-- Jika `recommendation` kosong, dibuat dari label lewat aturan di `src/services/recommendations.js`.
-- Diagnosis dengan `severity: "high"` otomatis membuat notifikasi di aplikasi.
-- Data pertumbuhan dikirim ke `POST /ai/growth`. Prediksi kesehatan saat ini regresi linear sederhana dari skor kesehatan historis.
+- `POST /ai/analyze`: menerima `multipart/form-data` dengan field `image` dan `device_id`; autentikasi Bearer pengguna admin/operator atau `x-api-key` kamera.
+- `GET /ai/provider-health`: memeriksa API key dan akses model Gemini melalui endpoint metadata model.
+- `GET /ai/provider-logs`: kompatibilitas untuk membaca riwayat diagnosis lokal TANOVA; bukan log request internal Google.
+- `GET /ai/diagnoses`: riwayat diagnosis tersimpan.
+- `GEMINI_MODEL` bawaan pada `.env.example` adalah `gemini-2.5-flash`; ganti hanya dengan model ID yang tersedia dan mendukung `generateContent` pada akun Gemini API.
 
-## 5. Contoh pemakaian (curl)
-
-```bash
-B=http://localhost:3000/api/v1
-
-# login
-TOKEN=$(curl -s -X POST $B/auth/login -H 'content-type: application/json' \
-  -d '{"username":"admin","password":"Admin12345!"}' | jq -r .access_token)
-
-# daftarkan perangkat beserta koneksi ThingsBoard (aktuator dan sensor bawaan dibuat otomatis)
-curl -X POST $B/devices -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"name":"Tanova Grove 01","zone":"Zona A","greenhouse":{"name":"Greenhouse Demo","location":"Surakarta"},"tb_device_id":"UUID-DEVICE","tb_username":"email@thingsboard","tb_password":"password-thingsboard"}'
-
-# dashboard
-curl $B/dashboard/overview -H "authorization: Bearer $TOKEN"
-
-# pindah ke manual lalu nyalakan kipas
-curl -X PUT $B/devices/ID_PERANGKAT/mode -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"mode":"manual"}'
-curl -X POST $B/actuators/ID_AKTUATOR/control -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"state":"on"}'
-
-# ubah target EC
-curl -X PUT $B/devices/ID_PERANGKAT/config -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"ec":2.8}'
-```
-
-Semua field JSON memakai `snake_case`. Format error seragam: `{ "statusCode": 409, "code": "MODE_NOT_MANUAL", "message": "..." }`.
-
-## 6. Daftar endpoint (`/api/v1`)
-
-| Modul | Endpoint |
-| --- | --- |
-| Auth | `POST /auth/login`, `/auth/refresh`, `/auth/change-password`, `/auth/forgot-password`, `/auth/reset-password` (tidak ada registrasi publik) |
-| Profil & akun | `GET/PATCH /users/me` (profil sendiri); admin: `GET/POST /users`, `GET/PATCH/DELETE /users/:id`, `PUT /users/:id/password`, `PUT /users/:id/greenhouses` |
-
+Simulator perangkat tidak memiliki kamera fisik, tetapi dapat mengirim foto uji ke endpoint backend dengan perintah `camera <path-gambar>` setelah `CAMERA_BACKEND_URL`, `CAMERA_API_KEY`, dan `CAMERA_DEVICE_ID` diisi di `simulator/.env`.
 ### Profil dan pemulihan password
 
 - `PATCH /api/v1/users/me` membutuhkan Bearer token dan `current_password`, lalu menerima salah satu atau beberapa field `name`, `username`, `email`, `phone`.
@@ -331,6 +299,7 @@ Semua field JSON memakai `snake_case`. Format error seragam: `{ "statusCode": 40
 | Koneksi ThingsBoard | `POST /devices/connection/test`, `POST /devices/:id/connection/test`, `PUT /devices/:id/connection` |
 | Mode dan pengaturan | `PUT /devices/:id/mode`, `GET/PUT /devices/:id/config` |
 | Kalibrasi | `GET /calibrations`, `GET/POST /sensors/:id/calibrations` |
+| Gemini AI | `GET /ai/provider-health` (cek akses model), `GET /ai/provider-logs` (riwayat diagnosis lokal) |
 | Telemetri | `GET /telemetry/history`, `GET /telemetry/export` (CSV) |
 | Log aktivitas | `GET /activity-logs`, `GET /activity-logs/export` (CSV) |
 | Perangkat | `GET /devices/summary`, `GET/POST /devices`, `GET/PATCH/DELETE /devices/:id`, CRUD sensor dan aktuator |

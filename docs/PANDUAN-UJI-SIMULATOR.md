@@ -97,6 +97,27 @@ Jika ada yang `[GAGAL]`, pesannya menjelaskan penyebab dan petunjuknya.
 
 ## Langkah 5. Skenario uji manual
 
+Simulator versi Tanova Grove 1 mendukung perintah terminal berikut untuk menyiapkan kondisi demo:
+
+| Perintah | Fungsi |
+| --- | --- |
+| `status` | Melihat koneksi ThingsBoard, nilai sensor, mode, relay, dan konfigurasi |
+| `set ph 4.8` | Mengubah nilai simulasi pH agar alur peringatan dapat diuji |
+| `set ec 0.8` | Mengubah nilai simulasi EC |
+| `set temp_air 38` | Menguji respons kipas otomatis |
+| `set temp_air 18` | Menguji respons pemanas otomatis |
+| `config {"waterflow":1.0}` lalu `set waterflow 0.1` | Menguji ambang pergantian pompa utama pada mode otomatis |
+| `sensor off` / `sensor on` | Mensimulasikan sensor berhenti / kembali mengirim data |
+| `mode manual` / `mode auto` | Mengganti mode lokal untuk demonstrasi |
+| `actuator fan on` | Menguji aktuator langsung dari simulator saat mode manual |
+| `actuator pump_ph_up on 5` | Menyalakan pompa dosis selama 5 detik |
+| `config {"ec":2.2,"ph_down":5.5,"ph_up":6.5}` | Mengubah konfigurasi kendali |
+| `help` | Melihat semua perintah |
+
+Perintah dari frontend tetap melewati jalur yang sama: **frontend → backend → ThingsBoard → simulator → balasan MQTT → backend → frontend**. Perintah terminal hanya alat bantu untuk mengatur kondisi demo.
+
+### Skenario pengujian dari FE/BE
+
 | Yang dilakukan | Yang diharapkan | Terlihat di terminal simulator |
 | --- | --- | --- |
 | `PUT /devices/:id/mode` dengan `manual` | Dashboard menampilkan mode manual | `Mode sistem: manual` |
@@ -108,6 +129,18 @@ Jika ada yang `[GAGAL]`, pesannya menjelaskan penyebab dan petunjuknya.
 | Ketik `sensor off` | Status `sensor_offline`, nilai sensor kosong | `Sensor offline` |
 | Ketik `sensor on` | Status kembali `connected` | `Sensor online` |
 | Hentikan simulator (Ctrl+C) | Status `offline` | |
+
+
+## Langkah 6. Batas simulasi yang perlu disampaikan saat presentasi
+
+- Nilai pH, EC, suhu, kelembapan, dan waterflow adalah nilai buatan yang bergerak mengikuti model simulasi; bukan hasil pembacaan sensor fisik.
+- Delapan status aktuator disimulasikan dan tidak menggerakkan relay/perangkat sungguhan.
+- Perintah kalibrasi mendapat balasan demo (`simulated: true`), tetapi tidak mengubah kalibrasi sensor.
+- Penerimaan SSID/password Wi-Fi hanya disimulasikan; simulator tidak menyambung ke jaringan Wi-Fi tersebut.
+- Simulator tidak memiliki kamera fisik. Untuk menguji alur kamera, isi `CAMERA_BACKEND_URL`, `CAMERA_API_KEY`, dan `CAMERA_DEVICE_ID` di `simulator/.env`, lalu gunakan perintah `camera <path-gambar>`. Backend menyimpan foto dan menganalisisnya langsung melalui Gemini API.
+- Sensor level tangki tidak dikirim karena kontrak backend menyatakan sensor tersebut belum tersedia.
+
+Jangan jalankan simulator dan perangkat fisik dengan access token ThingsBoard yang sama secara bersamaan.
 
 ## Masalah yang sering muncul
 
@@ -123,7 +156,7 @@ Jika ada yang `[GAGAL]`, pesannya menjelaskan penyebab dan petunjuknya.
 | Simulator `Galat MQTT` | Token salah, atau host MQTT beda region | Periksa `THINGSBOARD_TOKEN` dan `THINGSBOARD_HOST` |
 | Pesan ThingsBoard berhenti masuk | Kuota pesan bulanan paket gratis habis | Naikkan `THINGSBOARD_INTERVAL` ke 30 atau lebih |
 
-## Langkah 6. Mengganti simulator dengan service asli
+## Langkah 7. Mengganti simulator dengan service asli
 
 1. Hentikan simulator. Jangan jalankan dua pengirim dengan token yang sama.
 2. Jalankan service asli di Raspberry Pi dengan access token device yang sama (atau token device lain, lalu isi koneksi baru dengan Device ID-nya).
@@ -134,3 +167,16 @@ Jika ada yang `[GAGAL]`, pesannya menjelaskan penyebab dan petunjuknya.
 
 - Hapus perangkat uji dengan `DELETE /devices/:id` (akun admin), atau biarkan.
 - Hapus device `tanova-simulator` di ThingsBoard bila tidak dipakai lagi, agar data buatan tidak tercampur dengan data asli.
+
+
+## Status kalibrasi default untuk demo
+
+Seed/migrasi terbaru membuat catatan kalibrasi demo awal untuk setiap sensor. Simulator juga memulai dengan profil identity (scale=1, offset=0), sehingga sensor langsung berstatus terkalibrasi untuk presentasi. Catatan `method: demo-default` adalah status presentasi, bukan kalibrasi fisik.
+
+Untuk demo kalibrasi ulang, gunakan `POST /api/v1/sensors/:id/calibrations` dengan `send_to_device: true` dan `reference_values.points` berisi pasangan `measured` (bacaan yang sedang ditampilkan sebelum kalibrasi ulang) dan `reference` (nilai standar). Contoh: `{ "reference_values": { "points": [{ "measured": 6.2, "reference": 6.86 }, { "measured": 4.2, "reference": 4.01 }] }, "send_to_device": true }`. Simulator menghitung scale/offset, menerapkan koreksi ke telemetri ThingsBoard, mengirim ACK, dan menyimpan profil ke `simulator/calibration-state.json`. Backend baru menyimpan riwayat kalibrasi jika RPC berhasil. Firmware fisik belum tentu mendukung RPC ini; pastikan implementasi EEPROM tersedia sebelum mengirim ke perangkat asli.
+
+## Uji upload foto dan analisis AI melalui Apidog
+
+Gunakan `POST /api/v1/ai/analyze` (BUKAN `/ai/diagnoses`, karena endpoint diagnoses hanya menyimpan hasil yang sudah dianalisis). Header: `Authorization: Bearer <access_token>` untuk pengguna ber-role `admin`/`operator`, atau `x-api-key: <CAMERA_API_KEY>` untuk kamera. Body: `multipart/form-data`, field `image` bertipe File, dan `device_id` berisi ID device backend. Backend menyimpan foto asli ke `UPLOAD_DIR` (default `./uploads`, atau Supabase Storage jika dikonfigurasi), mengirim foto ke Gemini menggunakan `GEMINI_API_KEY`, lalu mengembalikan hasil diagnosis dan `image_url`.
+
+Untuk upload manual dari aplikasi/Apidog, gunakan Bearer token. Untuk ESP32-CAM, gunakan `x-api-key`. Folder `uploads/` disajikan pada `/uploads/`; bila memakai deployment dengan filesystem sementara, konfigurasi Supabase Storage atau persistent volume.

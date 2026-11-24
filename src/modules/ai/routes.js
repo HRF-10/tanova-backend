@@ -14,8 +14,8 @@ import { findDevice } from '../../lib/devices.js';
 import { ghScope } from '../../lib/scope.js';
 import { logActivity } from '../../lib/activity.js';
 import { recommend } from '../../services/recommendations.js';
-import { analyzeWithTanovaAI } from '../../services/aiService.js';
-import { sniffMime } from '../../services/imageStore.js';
+import { analyzeWithGemini, getGeminiHealth } from '../../services/aiService.js';
+import { sniffMime, saveImage } from '../../services/imageStore.js';
 
 const tags = ['Tanova AI'];
 const security = [{ bearerAuth: [] }];
@@ -32,6 +32,34 @@ export default async function aiRoutes(app) {
 
   // Pemrosesan AI dilakukan di sisi aplikasi; aplikasi mengirim hasilnya ke sini memakai login pengguna.
   const userOnly = [app.authenticate, app.requireRole('admin', 'operator')];
+
+  // Memeriksa akses API key dan metadata model Gemini. Berbeda dari GET /health backend.
+  app.get('/ai/provider-health', {
+    onRequest: ro,
+    schema: { tags, security, summary: 'Health check Gemini API (validasi API key dan akses model)' },
+  }, async () => getGeminiHealth());
+
+  // Gemini API tidak menyediakan endpoint /api/logs untuk log request project.
+  // Endpoint kompatibilitas ini menampilkan riwayat diagnosis lokal TANOVA.
+  app.get('/ai/provider-logs', {
+    onRequest: ro,
+    schema: {
+      tags, security, summary: 'Riwayat analisis Gemini yang tersimpan di database TANOVA',
+      querystring: { type: 'object', properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 500 },
+        offset: { type: 'integer', minimum: 0 },
+      } },
+    },
+  }, async (request) => {
+    const scope = ghScope(request);
+    const limit = Math.min(500, Math.max(1, Number(request.query?.limit) || 20));
+    const offset = Math.max(0, Number(request.query?.offset) || 0);
+    const q = db('ai_diagnoses');
+    if (scope) q.where({ greenhouse_id: scope });
+    const [{ total }] = await q.clone().count({ total: '*' });
+    const rows = await q.orderBy('created_at', 'desc').limit(limit).offset(offset);
+    return { total: Number(total), limit, offset, data: rows.map(diagnosisDto) };
+  });
 
   // ESP32 kirim x-api-key (CAMERA_API_KEY); aplikasi kirim Bearer token seperti biasa.
   const hash = (v) => crypto.createHash('sha256').update(String(v)).digest();
@@ -168,7 +196,7 @@ export default async function aiRoutes(app) {
     return reply.code(201).send(diagnosisDto(row));
   });
 
-  // Foto dari kamera (atau aplikasi) -> diteruskan ke layanan Tanova AI eksternal -> disimpan sebagai diagnosis.
+  // Foto dari kamera atau aplikasi -> disimpan -> dianalisis langsung oleh Gemini -> disimpan sebagai diagnosis.
   app.post('/ai/analyze', {
     onRequest: cameraOrUser,
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
@@ -178,7 +206,7 @@ export default async function aiRoutes(app) {
       tags,
       security: [{ bearerAuth: [] }, { cameraKey: [] }],
       consumes: ['multipart/form-data', 'image/jpeg'],
-      summary: 'Analisis foto tanaman melalui layanan Tanova AI eksternal dan simpan hasilnya',
+      summary: 'Analisis foto tanaman menggunakan Gemini API dan simpan hasilnya',
       description:
         'Kirim foto sebagai multipart/form-data (field "image") atau body mentah image/jpeg. ' +
         'device_id (ID perangkat Tanova) boleh di query atau field form; wajib untuk kamera. ' +
@@ -216,20 +244,22 @@ export default async function aiRoutes(app) {
       ({ greenhouse_id, device } = await resolveTarget(request, deviceId));
     }
 
-    const analysis = await analyzeWithTanovaAI(buffer, mime);
-    const { model, latency_ms } = analysis;
+    // Simpan file asli sebelum inferensi agar foto tetap tersimpan jika Gemini gagal.
+    const storedImageUrl = await saveImage(buffer, mime);
+    const analysis = await analyzeWithGemini(buffer, mime);
+    const { model, latency_ms, result } = analysis;
     if (!analysis.is_plant) {
       return reply.send({
         saved: false,
         is_plant: false,
-        message: 'Layanan AI tidak mengembalikan hasil diagnosis tanaman yang dikenali.',
+        image_url: storedImageUrl,
+        provider_image_url: null,
+        message: result.summary || 'Foto tidak dapat dikenali sebagai tanaman.',
         model,
         latency_ms,
-        service_result: analysis.payload || null,
+        ai_result: result,
       });
     }
-
-    const result = analysis.result;
     const row = await createDiagnosis(request, {
       greenhouse_id,
       device,
@@ -239,14 +269,16 @@ export default async function aiRoutes(app) {
       severity: result.severity,
       recommendation: result.summary || undefined,
       recommended_actions: result.recommendations.length ? result.recommendations : undefined,
-      // Foto sudah disimpan oleh layanan AI teman; simpan URL publik yang dikembalikan.
-      image_url: analysis.image_url,
+      // Simpan URL foto asli yang diterima backend agar dapat ditampilkan di riwayat diagnosis.
+      image_url: storedImageUrl,
       details: {
         source: request.isCamera ? 'camera' : 'app',
         plant: result.plant,
         problem: result.problem,
         service_status: result.status,
-        response_text: result.raw_text,
+        response_text: result.formatted_text,
+        symptoms: result.symptoms,
+        ai_provider: 'gemini',
         model,
         latency_ms,
       },
@@ -259,7 +291,9 @@ export default async function aiRoutes(app) {
         plant: result.plant,
         problem: result.problem,
         confidence: result.confidence === null ? null : Math.round(result.confidence * 100),
-        text: result.raw_text,
+        text: result.formatted_text,
+        provider_image_url: null,
+        provider: 'gemini',
       },
     });
   });

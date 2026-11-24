@@ -50,7 +50,7 @@ export default async function calibrationRoutes(app) {
   app.post('/sensors/:id/calibrations', {
     onRequest: rw,
     schema: {
-      tags, security, summary: 'Catat kalibrasi sensor (send_to_device belum didukung service_1.py; biarkan false)',
+      tags, security, summary: 'Catat kalibrasi sensor; send_to_device mengirim RPC calibrate dan hanya disimpan jika perangkat menerima',
       params: { type: 'object', properties: { id: { type: 'string' } } },
       body: {
         type: 'object',
@@ -59,7 +59,7 @@ export default async function calibrationRoutes(app) {
           calibrated_at: { type: 'string', description: 'ISO 8601; default sekarang' },
           next_due_at: { type: 'string', description: 'ISO 8601; default mengikuti interval jenis sensor' },
           method: { type: 'string', maxLength: 150 },
-          reference_values: { type: 'object', description: 'Contoh pH: { "buffer": [4.01, 6.86] }' },
+          reference_values: { type: 'object', description: 'Pasangan nilai ukur dan standar: { "points": [{ "measured": 6.2, "reference": 6.86 }] }' },
           notes: { type: 'string', maxLength: 1000 },
           send_to_device: { type: 'boolean', default: false },
         },

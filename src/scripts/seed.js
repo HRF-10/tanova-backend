@@ -30,14 +30,27 @@ try {
       id: deviceId, greenhouse_id: ghId, name: 'Tanova Grove 01', zone: 'Zona A', type: 'controller',
       tb_device_id: env.tb.mock ? 'mock-device-1' : null, mode: 'manual', config: toJson({ firmware: '1.0.0' }), created_at: t, updated_at: t,
     });
-    await db('sensors').insert([
+    const sensorRows = [
       { type: 'ph', name: 'Sensor pH', unit: '', tb_key: env.tb.keys.ph },
       { type: 'ec', name: 'Sensor EC/TDS', unit: 'mS/cm', tb_key: env.tb.keys.ec },
       { type: 'water_temp', name: 'Sensor Suhu Air', unit: '°C', tb_key: env.tb.keys.water_temp },
       { type: 'air_temp', name: 'Sensor Suhu Udara', unit: '°C', tb_key: env.tb.keys.air_temp },
       { type: 'humidity', name: 'Sensor Kelembapan', unit: '%', tb_key: env.tb.keys.humidity },
       { type: 'waterflow', name: 'Sensor Aliran Air', unit: '', tb_key: env.tb.keys.waterflow },
-    ].map((x) => ({ id: newId(), device_id: deviceId, is_active: true, created_at: t, ...x })));
+    ].map((x) => ({ id: newId(), device_id: deviceId, is_active: true, created_at: t, ...x }));
+    await db('sensors').insert(sensorRows);
+    // Default demo: sensor ditampilkan sudah dikalibrasi agar dashboard siap presentasi.
+    // Ini catatan simulasi, BUKAN bukti kalibrasi fisik pada hardware.
+    await db('sensor_calibrations').insert(sensorRows.map((sensor) => {
+      const intervalDays = ['ph', 'ec'].includes(sensor.type) ? 30 : 180;
+      return {
+        id: newId(), sensor_id: sensor.id, calibrated_at: t,
+        due_at: t + intervalDays * DAY, method: 'demo-default',
+        reference_values: toJson({ profile: 'Tanova Grove 1 demo' }),
+        notes: 'Status awal demo; bukan hasil kalibrasi fisik perangkat.',
+        performed_by: adminId, created_at: t,
+      };
+    }));
     await db('actuators').insert([
       { name: 'Pompa Nutrisi A', type: 'dosing_pump', control_key: 'pump_ec_a' },
       { name: 'Pompa Nutrisi B', type: 'dosing_pump', control_key: 'pump_ec_b' },

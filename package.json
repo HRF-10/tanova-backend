@@ -12,7 +12,8 @@
     "simulator": "node simulator/tanova-simulator.js",
     "fake-tb": "node tools/fake-thingsboard.js",
     "gen-secrets": "node src/scripts/gen-secrets.js",
-    "check": "node tools/check-backend.js"
+    "check": "node tools/check-backend.js",
+    "test:calibration": "node tools/test-calibration.js"
   },
   "license": "UNLICENSED",
   "dependencies": {

@@ -1,19 +1,27 @@
 // =====================================================================================
-// SIMULATOR SERVICE TANOVA
+// TANOVA GROVE 1 — DEVICE SIMULATOR
 //
-// Berperan sebagai Raspberry Pi (service_1.py): terhubung ke ThingsBoard lewat MQTT memakai access token,
-// mengirim telemetri berkala, menerima RPC dan atribut dari backend, lalu membalas seperti service asli.
-// Semua perilaku mengikuti kontrak di src/config/contract.js dan docs/KONTRAK-SERVICE.md.
-// Bukan pengganti service asli: tidak ada sensor, Redis, mosquitto, atau relay sungguhan.
+// Simulator ini menggantikan perangkat fisik untuk demo FE + BE:
+// - MQTT ThingsBoard: telemetri, client/shared attributes, RPC request/response
+// - Sensor: pH, EC, suhu air, suhu udara, kelembapan, waterflow
+// - Aktuator: 4 pompa dosis, 2 pompa sirkulasi, kipas, pemanas
+// - Mode manual/otomatis, konfigurasi EC/pH/DAP, interlock dan timer pompa dosis
 //
-// Jalankan:  npm run simulator      (isi simulator/.env dulu, lihat simulator/.env.example)
-// Perintah di terminal saat berjalan: ketik "help"
+// Catatan: nilai sensor dan efek aktuator adalah data simulasi, bukan hasil pengukuran.
+// Analisis foto memakai Gemini di backend; simulator menyediakan perintah camera untuk menguji jalur upload backend.
+// Profil kalibrasi simulator dimulai identity (status siap demo), lalu RPC calibrate
+// menerapkan koreksi offset/scale ke nilai sensor simulasi.
+//
+// Jalankan: npm run simulator
+// Perintah terminal: help
 // =====================================================================================
 import mqtt from 'mqtt';
+import fs from 'node:fs';
 import dotenv from 'dotenv';
 import readline from 'node:readline';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CALIBRATION_KEYS, normalizeCalibrationSensor, calculateCalibrationProfile, composeCalibrationProfiles, calibratedReading } from './calibration.js';
 
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '.env') });
 
@@ -22,359 +30,760 @@ const HOST = process.env.THINGSBOARD_HOST || 'mqtt.thingsboard.cloud';
 const TLS = bool(process.env.THINGSBOARD_TLS);
 const PORT = Number(process.env.THINGSBOARD_PORT) || (TLS ? 8883 : 1883);
 const TOKEN = process.env.THINGSBOARD_TOKEN;
-const INTERVAL = Math.max(1, Number(process.env.THINGSBOARD_INTERVAL) || 10);
+const INTERVAL = Math.max(2, Number(process.env.THINGSBOARD_INTERVAL) || 10);
 const MANUAL_MAX_DURATION = Math.max(1, Number(process.env.MANUAL_MAX_DURATION) || 300);
+const AUTO_TICK_MS = Math.max(1000, Number(process.env.SIM_AUTO_TICK_MS) || 3000);
+const PHYSICS_TICK_MS = Math.max(500, Number(process.env.SIM_PHYSICS_TICK_MS) || 2000);
+const FAST_DEMO = process.env.SIM_FAST_DEMO === undefined ? true : bool(process.env.SIM_FAST_DEMO);
+const CAMERA_BACKEND_URL = (process.env.CAMERA_BACKEND_URL || 'http://localhost:3000/api/v1/ai/analyze').replace(/\/$/, '');
+const CAMERA_API_KEY = process.env.CAMERA_API_KEY || '';
+const CAMERA_DEVICE_ID = process.env.CAMERA_DEVICE_ID || ''; 
 
 if (!TOKEN) {
   console.error('THINGSBOARD_TOKEN belum diisi. Salin simulator/.env.example menjadi simulator/.env lalu isi access token device.');
   process.exit(1);
 }
 
-// ------------------------------------------------------------------ kontrak
-const VALUE_KEYS = ['ec', 'ph', 'temp_water', 'temp_air', 'humidity', 'waterflow'];
-const STATUS_KEYS = ['pump_ec_a', 'pump_ec_b', 'pump_ph_up', 'pump_ph_down', 'pump_a', 'pump_b', 'fan', 'heater'];
-const DOSING = ['pump_ec_a', 'pump_ec_b', 'pump_ph_up', 'pump_ph_down'];
-const CONFIG_KEYS = ['ec_mode', 'ec', 'ph_down', 'ph_up', 'fan_air_temp_min', 'fan_air_temp_max', 'fan_humidity',
-  'peristaltic_pump_duration', 'peristaltic_pump_period', 'waterflow', 'dap', 'start_dap', 'is_active'];
-// Sama dengan _REMOTE_SPEC di service_1.py
+// Key ini mengikuti src/config/contract.js dan docs/KONTRAK-SERVICE.md.
+const SENSOR_KEYS = ['ph', 'ec', 'temp_water', 'temp_air', 'humidity', 'waterflow'];
+const ACTUATOR_KEYS = ['pump_ec_a', 'pump_ec_b', 'pump_ph_up', 'pump_ph_down', 'pump_a', 'pump_b', 'fan', 'heater'];
+const DOSING_KEYS = ['pump_ec_a', 'pump_ec_b', 'pump_ph_up', 'pump_ph_down'];
+const CONFIG_KEYS = [
+  'ec_mode', 'ec', 'ph_down', 'ph_up', 'fan_air_temp_min', 'fan_air_temp_max',
+  'fan_humidity', 'peristaltic_pump_duration', 'peristaltic_pump_period',
+  'waterflow', 'dap', 'start_dap',
+];
+const REMOTE_KEYS = ['mode', ...CONFIG_KEYS];
 const SPEC = {
   mode: ['enum', ['auto', 'manual']],
   ec_mode: ['enum', ['all', 'single']],
-  ec: ['num', 0, 20], ph_down: ['num', 0, 14], ph_up: ['num', 0, 14],
-  fan_air_temp_min: ['num', -20, 100], fan_air_temp_max: ['num', -20, 100], fan_humidity: ['num', 0, 100],
-  peristaltic_pump_duration: ['num', 1, 600], peristaltic_pump_period: ['num', 0, 1440], waterflow: ['num', 0, 1000],
-  dap: ['list', 0, 20, 400], start_dap: ['datetime'],
+  ec: ['num', 0, 20],
+  ph_down: ['num', 0, 14],
+  ph_up: ['num', 0, 14],
+  fan_air_temp_min: ['num', -20, 100],
+  fan_air_temp_max: ['num', -20, 100],
+  fan_humidity: ['num', 0, 100],
+  peristaltic_pump_duration: ['num', 1, 600],
+  peristaltic_pump_period: ['num', 0, 1440],
+  waterflow: ['num', 0, 1000],
+  dap: ['list', 0, 20, 400],
+  start_dap: ['datetime'],
 };
-const REMOTE_KEYS = Object.keys(SPEC);
-const ORDER_RULES = [
-  ['ph_down', 'ph_up', 'ph_down harus lebih kecil dari ph_up'],
-  ['fan_air_temp_min', 'fan_air_temp_max', 'fan_air_temp_min harus lebih kecil dari fan_air_temp_max'],
-];
-const T = {
+const TOPIC = {
   telemetry: 'v1/devices/me/telemetry',
-  attrs: 'v1/devices/me/attributes',
-  attrsReq: 'v1/devices/me/attributes/request/1',
-  attrsResp: 'v1/devices/me/attributes/response/',
-  rpcReq: 'v1/devices/me/rpc/request/',
-  rpcRes: 'v1/devices/me/rpc/response/',
+  attributes: 'v1/devices/me/attributes',
+  attributesRequest: 'v1/devices/me/attributes/request/1',
+  attributesResponse: 'v1/devices/me/attributes/response/',
+  rpcRequest: 'v1/devices/me/rpc/request/',
+  rpcResponse: 'v1/devices/me/rpc/response/',
 };
-
-// ------------------------------------------------------------------ keadaan
 const nowWib = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' });
-let autoMode = process.env.SIM_START_MODE === 'auto'; // service asli mulai dari "auto"; simulator "manual" agar mudah diuji
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const round = (v, d = 2) => Math.round(v * 10 ** d) / 10 ** d;
+const log = (message) => console.log(`[${new Date().toLocaleTimeString('id-ID', { hour12: false })}] ${message}`);
+
+let mode = process.env.SIM_START_MODE === 'auto' ? 'auto' : 'manual';
 let sensorOnline = true;
 let configErrors = {};
-// Nilai bawaan dibuat wajar untuk iklim tropis (bawaan service asli: fan_air_temp_min 30, fan_humidity 30)
-const config = {
-  ec_mode: 'all', ec: 2.0, ph_down: 5.6, ph_up: 7.5, fan_air_temp_min: 20, fan_air_temp_max: 32, fan_humidity: 80,
-  peristaltic_pump_duration: 20, peristaltic_pump_period: 1, waterflow: 0, dap: [], start_dap: nowWib(), is_active: true,
-};
-const values = { ec: 1.9, ph: 6.3, temp_water: 25, temp_air: 29, humidity: 70, waterflow: 2.5 };
-const base = { ...values };
-const status = Object.fromEntries(STATUS_KEYS.map((k) => [k, false]));
-status.pump_a = true;
-const timers = new Map(); // pompa dosis -> timeout
+// Profil awal identity: sensor tampil sudah terkalibrasi saat demo dimulai.
+// Nilai awal tidak dikoreksi (scale=1, offset=0); kalibrasi ulang dari FE mengubah profil ini.
+const calibrationState = Object.fromEntries(CALIBRATION_KEYS.map((key) => [key, {
+  calibrated: true, calibrated_at: Date.now(), scale: 1, offset: 0,
+  reference_values: { method: 'demo-default', points: [] },
+}]));
+const CALIBRATION_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'calibration-state.json');
+try {
+  if (fs.existsSync(CALIBRATION_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(CALIBRATION_FILE, 'utf8'));
+    for (const key of CALIBRATION_KEYS) {
+      const item = saved?.[key];
+      if (item && item.calibrated === true && Number.isFinite(item.scale) && Number.isFinite(item.offset)) {
+        calibrationState[key] = { ...calibrationState[key], ...item };
+      }
+    }
+    log('Profil kalibrasi sebelumnya dimuat dari calibration-state.json');
+  }
+} catch (error) {
+  log(`Profil kalibrasi tersimpan tidak dapat dibaca; memakai profil demo awal: ${error.message}`);
+}
+
+function persistCalibrationState() {
+  fs.writeFileSync(CALIBRATION_FILE, JSON.stringify(calibrationState, null, 2));
+}
+let wifiSsid = '';
+let wifiPasswordConfigured = false;
+let lastPumpSwitchAt = 0;
 let nextDoseAt = 0;
+let wakeTimer = null;
+let connected = false;
+let stopping = false;
 
-const log = (msg) => console.log(`[${new Date().toLocaleTimeString('id-ID', { hour12: false })}] ${msg}`);
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
+const config = {
+  ec_mode: 'all',
+  ec: 2.0,
+  ph_down: 5.6,
+  ph_up: 6.5,
+  fan_air_temp_min: 20,
+  fan_air_temp_max: 32,
+  fan_humidity: 80,
+  peristaltic_pump_duration: 8,
+  peristaltic_pump_period: 1,
+  waterflow: 0,
+  dap: [],
+  start_dap: nowWib(),
+  is_active: true,
+};
 
-// ------------------------------------------------------------------ validasi (sama dengan service)
-function validateRemote(key, value) {
+const values = {
+  ph: 6.1,
+  ec: 1.85,
+  temp_water: 25.2,
+  temp_air: 29.1,
+  humidity: 68,
+  waterflow: 2.5,
+};
+const sensorTargets = { ...values };
+const sensorOverrides = new Set();
+const actuator = Object.fromEntries(ACTUATOR_KEYS.map((key) => [key, false]));
+actuator.pump_a = true;
+const doseTimers = new Map();
+
+function validateConfigValue(key, value) {
   const spec = SPEC[key];
-  if (spec[0] === 'enum') return typeof value === 'string' && spec[1].includes(value) ? null : `harus salah satu dari ${spec[1].join(', ')}`;
-  if (spec[0] === 'num') return isNum(value) && value >= spec[1] && value <= spec[2] ? null : `harus angka ${spec[1]} sampai ${spec[2]}`;
+  if (!spec) return 'key tidak dikenal';
+  if (spec[0] === 'enum') {
+    return typeof value === 'string' && spec[1].includes(value)
+      ? null : `harus salah satu dari ${spec[1].join(', ')}`;
+  }
+  if (spec[0] === 'num') {
+    return isNum(value) && value >= spec[1] && value <= spec[2]
+      ? null : `harus angka ${spec[1]} sampai ${spec[2]}`;
+  }
   if (spec[0] === 'list') {
     if (!Array.isArray(value) || value.length > spec[3]) return `harus daftar angka (maksimum ${spec[3]} nilai)`;
-    return value.every((v) => isNum(v) && v >= spec[1] && v <= spec[2]) ? null : `setiap nilai harus angka ${spec[1]} sampai ${spec[2]}`;
+    return value.every((item) => isNum(item) && item >= spec[1] && item <= spec[2])
+      ? null : `setiap nilai harus angka ${spec[1]} sampai ${spec[2]}`;
   }
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) && !Number.isNaN(Date.parse(value.replace(' ', 'T')))
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    && !Number.isNaN(Date.parse(value.replace(' ', 'T')))
     ? null : 'format harus YYYY-MM-DD HH:MM:SS';
 }
 
-function applyRemoteConfig(updates) {
-  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) return { valid: {}, rejected: {} };
-  const candidates = Object.fromEntries(REMOTE_KEYS.filter((k) => k in updates).map((k) => [k, updates[k]]));
-  if (!Object.keys(candidates).length) return { valid: {}, rejected: {} };
+function cancelDose(key) {
+  const timer = doseTimers.get(key);
+  if (timer) clearTimeout(timer);
+  doseTimers.delete(key);
+}
+
+function stopNonMainActuators() {
+  for (const key of DOSING_KEYS) cancelDose(key);
+  for (const key of [...DOSING_KEYS, 'fan', 'heater']) actuator[key] = false;
+}
+
+function wake() {
+  if (!connected || stopping) return;
+  clearTimeout(wakeTimer);
+  wakeTimer = setTimeout(() => {
+    publishTelemetry();
+    publishClientAttributes();
+  }, 150);
+}
+
+function publish(topic, payload) {
+  if (!connected || stopping) return;
+  client.publish(topic, JSON.stringify(payload), { qos: 1 }, (err) => {
+    if (err) log(`Gagal publish ${topic}: ${err.message}`);
+  });
+}
+
+function sensorReadings() {
+  return Object.fromEntries(SENSOR_KEYS.map((key) => {
+    const calibrationKey = normalizeCalibrationSensor(key);
+    const profile = calibrationState[calibrationKey] || { scale: 1, offset: 0 };
+    return [key, calibratedReading(values[key], profile)];
+  }));
+}
+
+function buildTelemetry() {
+  const telemetry = {};
+  if (sensorOnline) {
+    const decimals = { ph: 2, ec: 2, temp_water: 1, temp_air: 1, humidity: 0, waterflow: 2 };
+    const readings = sensorReadings();
+    for (const key of SENSOR_KEYS) telemetry[key] = round(readings[key], decimals[key]);
+  }
+  for (const key of ACTUATOR_KEYS) telemetry[key] = Boolean(actuator[key]);
+  for (const [key, state] of Object.entries(calibrationState)) {
+    telemetry[`calibrated_${key}`] = Boolean(state.calibrated);
+  }
+  telemetry.sensor_online = sensorOnline;
+  telemetry.mode = mode;
+  return telemetry;
+}
+
+function buildClientAttributes() {
+  return {
+    ...Object.fromEntries(CONFIG_KEYS.map((key) => [key, config[key]])),
+    is_active: Boolean(config.is_active),
+    mode,
+    config_errors: { ...configErrors },
+  };
+}
+
+function publishTelemetry() {
+  if (connected) publish(TOPIC.telemetry, { ts: Date.now(), values: buildTelemetry() });
+}
+
+function publishClientAttributes() {
+  if (connected) publish(TOPIC.attributes, buildClientAttributes());
+}
+
+function setMode(nextMode) {
+  if (!['auto', 'manual'].includes(nextMode)) return { ok: false, error: 'mode harus auto atau manual' };
+  if (mode === nextMode) return { ok: true, mode, unchanged: true };
+  mode = nextMode;
+  log(`Mode sistem berubah menjadi ${mode}`);
+  if (mode === 'manual') stopNonMainActuators();
+  else if (!actuator.pump_a && !actuator.pump_b) actuator.pump_a = true;
+  wake();
+  return { ok: true, mode };
+}
+
+function applyConfig(updates) {
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return { valid: {}, rejected: {}, unknown: [] };
+  }
   const valid = {};
   const rejected = {};
-  for (const [k, v] of Object.entries(candidates)) {
-    const reason = validateRemote(k, v);
-    if (reason) rejected[k] = reason;
-    else valid[k] = v;
+  const unknown = Object.keys(updates).filter((key) => !REMOTE_KEYS.includes(key) && key !== 'is_active');
+  for (const [key, value] of Object.entries(updates)) {
+    if (key === 'is_active') {
+      if (typeof value === 'boolean') valid[key] = value;
+      else rejected[key] = 'harus boolean';
+      continue;
+    }
+    if (!SPEC[key]) continue;
+    const reason = validateConfigValue(key, value);
+    if (reason) rejected[key] = reason;
+    else valid[key] = value;
   }
+
   const merged = { ...config, ...valid };
-  for (const [low, high, text] of ORDER_RULES) {
-    if ((low in valid || high in valid) && !(isNum(merged[low]) && isNum(merged[high]) && merged[low] < merged[high])) {
-      for (const k of [low, high]) if (k in valid) { rejected[k] = text; delete valid[k]; }
+  const orderRules = [
+    ['ph_down', 'ph_up', 'ph_down harus lebih kecil dari ph_up'],
+    ['fan_air_temp_min', 'fan_air_temp_max', 'fan_air_temp_min harus lebih kecil dari fan_air_temp_max'],
+  ];
+  for (const [lower, upper, message] of orderRules) {
+    if ((lower in valid || upper in valid) && !(merged[lower] < merged[upper])) {
+      for (const key of [lower, upper]) {
+        if (key in valid) {
+          rejected[key] = message;
+          delete valid[key];
+        }
+      }
     }
   }
-  const previousMode = autoMode ? 'auto' : 'manual';
-  const { mode, ...configUpdates } = valid;
-  Object.assign(config, configUpdates);
-  configErrors = Object.fromEntries(Object.entries(configErrors).filter(([k]) => !(k in candidates)));
+
+  const previousMode = mode;
+  const requestedMode = valid.mode;
+  delete valid.mode;
+  Object.assign(config, valid);
+  if (requestedMode) setMode(requestedMode);
+
+  configErrors = Object.fromEntries(Object.entries(configErrors).filter(([key]) => !(key in updates)));
   Object.assign(configErrors, rejected);
-  if (Object.keys(valid).length) log(`Pengaturan dari website diterapkan: ${JSON.stringify(valid)}`);
-  if (Object.keys(rejected).length) log(`Pengaturan dari website DITOLAK: ${JSON.stringify(rejected)}`);
-  if (mode && mode !== previousMode) switchMode(mode);
-  wake();
-  return { valid, rejected };
+  if (Object.keys(valid).length) log(`Konfigurasi diterapkan: ${JSON.stringify(valid)}`);
+  if (Object.keys(rejected).length) log(`Konfigurasi ditolak: ${JSON.stringify(rejected)}`);
+  if (previousMode !== mode || Object.keys(valid).length || Object.keys(rejected).length) wake();
+  return { valid, rejected, unknown };
 }
 
-function switchMode(newMode) {
-  log(`Mode sistem: ${newMode}`);
-  if (newMode === 'auto') {
-    if (!(status.pump_a || status.pump_b)) status.pump_a = true;
-    autoMode = true;
-    return;
-  }
-  autoMode = false;
-  for (const t of timers.values()) clearTimeout(t);
-  timers.clear();
-  for (const k of [...DOSING, 'fan', 'heater']) status[k] = false;
-}
-
-// ------------------------------------------------------------------ RPC (sama dengan service)
-const fail = (error) => ({ ok: false, error });
-
-function startDose(name, seconds, then) {
-  status[name] = true;
-  clearTimeout(timers.get(name));
-  timers.set(name, setTimeout(() => {
-    timers.delete(name);
-    status[name] = false;
-    log(`${name} selesai`);
+function startDose(key, seconds, onComplete) {
+  if (!DOSING_KEYS.includes(key)) return { ok: false, error: 'aktuator bukan pompa dosis' };
+  actuator[key] = true;
+  cancelDose(key);
+  const timer = setTimeout(() => {
+    doseTimers.delete(key);
+    actuator[key] = false;
+    log(`${key} selesai setelah ${seconds} detik`);
     wake();
-    if (then && autoMode) then();
-  }, seconds * 1000));
+    if (onComplete && mode === 'auto') onComplete();
+  }, seconds * 1000);
+  doseTimers.set(key, timer);
   wake();
+  return { ok: true, actuator: key, state: true, duration: seconds };
 }
 
-function rpcSetActuator(params) {
-  if (autoMode) return fail('Mode otomatis aktif; ubah ke manual terlebih dahulu');
-  const { actuator: name, state } = params;
-  const known = [...DOSING, 'fan', 'heater', 'pump_a', 'pump_b'];
-  if (!known.includes(name)) return fail(`actuator tidak dikenal; pilih: ${known.join(', ')}`);
-  if (typeof state !== 'boolean') return fail('state harus true atau false');
+function setActuator(params) {
+  if (mode !== 'manual') return { ok: false, error: 'Mode otomatis aktif; ubah ke manual terlebih dahulu' };
+  const { actuator: key, state } = params;
+  if (!ACTUATOR_KEYS.includes(key)) return { ok: false, error: `actuator tidak dikenal: ${key}` };
+  if (typeof state !== 'boolean') return { ok: false, error: 'state harus boolean' };
 
-  if (DOSING.includes(name)) {
+  if (DOSING_KEYS.includes(key)) {
     if (!state) {
-      clearTimeout(timers.get(name));
-      timers.delete(name);
-      status[name] = false;
+      cancelDose(key);
+      actuator[key] = false;
       wake();
-      return { ok: true, actuator: name, state: false };
+      return { ok: true, actuator: key, state: false };
     }
-    const busy = DOSING.filter((n) => n !== name && status[n]);
-    if (busy.length) return fail(`pompa dosis lain sedang aktif: ${busy.join(', ')}`);
+    const busy = DOSING_KEYS.filter((other) => other !== key && actuator[other]);
+    if (busy.length) return { ok: false, error: `pompa dosis lain sedang aktif: ${busy.join(', ')}` };
     const duration = params.duration ?? config.peristaltic_pump_duration;
-    if (!isNum(duration) || duration < 1 || duration > MANUAL_MAX_DURATION) return fail(`duration harus angka 1 sampai ${MANUAL_MAX_DURATION} detik`);
-    startDose(name, duration);
-    return { ok: true, actuator: name, state: true, duration };
+    if (!isNum(duration) || duration < 1 || duration > MANUAL_MAX_DURATION) {
+      return { ok: false, error: `duration harus angka 1 sampai ${MANUAL_MAX_DURATION} detik` };
+    }
+    return startDose(key, duration);
   }
-  if (name === 'fan' || name === 'heater') {
-    status[name] = state;
+
+  if (key === 'pump_a' || key === 'pump_b') {
+    if (!state) {
+      actuator[key] = false;
+    } else {
+      actuator.pump_a = key === 'pump_a';
+      actuator.pump_b = key === 'pump_b';
+    }
     wake();
-    return { ok: true, actuator: name, state };
+    return { ok: true, actuator: key, state, pump_a: actuator.pump_a, pump_b: actuator.pump_b };
   }
-  const toA = name === 'pump_a';
-  const isOn = toA ? status.pump_a : status.pump_b;
-  if (!state) {
-    if (!isOn) return { ok: true, actuator: name, state: false, unchanged: true };
-    status[name] = false;
-    wake();
-    return { ok: true, actuator: name, state: false };
-  }
-  if (isOn) return { ok: true, actuator: name, state: true, unchanged: true };
-  status.pump_a = toA;
-  status.pump_b = !toA;
+
+  actuator[key] = state;
   wake();
-  return { ok: true, actuator: name, state: true };
-}
-
-function handleRpc(payload) {
-  try {
-    const { method } = payload;
-    let { params } = payload;
-    if (typeof params === 'string') params = JSON.parse(params);
-    if (params === undefined || params === null) params = {};
-    if (typeof params !== 'object' || Array.isArray(params)) return fail('params harus objek JSON');
-    if (method === 'setMode') {
-      const { rejected } = applyRemoteConfig({ mode: params.mode });
-      return rejected.mode ? fail(rejected.mode) : { ok: true, mode: autoMode ? 'auto' : 'manual' };
-    }
-    if (method === 'setConfig') {
-      const unknown = Object.keys(params).filter((k) => !REMOTE_KEYS.includes(k));
-      const { valid, rejected } = applyRemoteConfig(params);
-      const result = { ok: Object.keys(valid).length > 0 && !Object.keys(rejected).length, applied: valid, rejected, unknown };
-      if (!Object.keys(valid).length && !Object.keys(rejected).length) result.error = 'tidak ada pengaturan yang dikenal';
-      return result;
-    }
-    if (method === 'setActuator') return rpcSetActuator(params);
-    if (method === 'getState') return { ok: true, mode: autoMode ? 'auto' : 'manual', sensor_online: sensorOnline, status, values, config: buildAttributes() };
-    return fail(`method '${method}' tidak dikenal`);
-  } catch (err) {
-    return fail(`galat di perangkat: ${err.message}`);
-  }
-}
-
-// ------------------------------------------------------------------ simulasi sensor dan kendali otomatis
-function physics() {
-  if (!sensorOnline) return;
-  const noise = (a) => (Math.random() - 0.5) * a;
-  const v = values;
-  v.ph += (base.ph - v.ph) * 0.01 + noise(0.02) + (status.pump_ph_up ? 0.05 : 0) - (status.pump_ph_down ? 0.05 : 0);
-  v.ec += (base.ec - v.ec) * 0.005 + noise(0.01) + (status.pump_ec_a || status.pump_ec_b ? 0.03 : 0);
-  v.temp_water += (base.temp_water - v.temp_water) * 0.01 + noise(0.05);
-  v.temp_air += (base.temp_air - v.temp_air) * 0.01 + noise(0.1) + (status.heater ? 0.15 : 0) - (status.fan ? 0.12 : 0);
-  v.humidity += (base.humidity - v.humidity) * 0.01 + noise(0.3) - (status.fan ? 0.4 : 0);
-  v.waterflow = status.pump_a || status.pump_b ? 2.5 + noise(0.3) : 0;
-  v.ph = Math.min(14, Math.max(0, v.ph));
-  v.ec = Math.min(20, Math.max(0, v.ec));
-  v.humidity = Math.min(100, Math.max(0, v.humidity));
+  return { ok: true, actuator: key, state };
 }
 
 function targetEc() {
   if (config.ec_mode === 'single' && config.dap.length) {
-    const day = Math.floor((Date.now() - Date.parse(config.start_dap.replace(' ', 'T') + '+07:00')) / 86_400_000);
+    const start = Date.parse(config.start_dap.replace(' ', 'T') + '+07:00');
+    const day = Math.floor((Date.now() - start) / 86_400_000);
     return config.dap[Math.min(Math.max(day, 0), config.dap.length - 1)];
   }
   return config.ec;
 }
 
-// Kendali otomatis disederhanakan dari service asli: kipas, pemanas, dan satu dosis pada satu waktu
-function autoControl() {
-  if (!autoMode || !sensorOnline) return;
-  const v = values;
-  const want = (key, on) => {
-    if (status[key] !== on) { status[key] = on; log(`[otomatis] ${key} ${on ? 'menyala' : 'mati'}`); wake(); }
-  };
-  want('fan', v.humidity >= config.fan_humidity || v.temp_air >= config.fan_air_temp_max);
-  want('heater', v.temp_air <= config.fan_air_temp_min);
-
-  if (DOSING.some((n) => status[n]) || Date.now() < nextDoseAt) return;
-  const duration = config.peristaltic_pump_duration;
-  const cooldown = Math.min(config.peristaltic_pump_period * 60, 20) * 1000; // dipercepat agar terlihat saat demo
-  let pick = null;
-  let chain;
-  if (v.ph < config.ph_down) pick = 'pump_ph_up';
-  else if (v.ph > config.ph_up) pick = 'pump_ph_down';
-  else if (v.ec < targetEc()) { pick = 'pump_ec_a'; chain = () => startDose('pump_ec_b', duration); }
-  if (!pick) return;
-  log(`[otomatis] dosis ${pick} ${duration} detik`);
-  nextDoseAt = Date.now() + duration * 1000 * (chain ? 2 : 1) + cooldown;
-  startDose(pick, duration, chain);
+function switchMainPump() {
+  const next = actuator.pump_a ? 'pump_b' : 'pump_a';
+  actuator.pump_a = next === 'pump_a';
+  actuator.pump_b = next === 'pump_b';
+  lastPumpSwitchAt = Date.now();
+  log(`[otomatis] pompa utama berpindah ke ${next}`);
+  wake();
 }
 
-function setSensorOnline(on) {
-  if (sensorOnline === on) return;
-  sensorOnline = on;
-  log(`Sensor ${on ? 'online' : 'offline'}`);
-  if (!on && autoMode) {
-    // pengawas service asli: sensor diam saat mode otomatis -> semua relay mati kecuali pompa utama A
-    for (const t of timers.values()) clearTimeout(t);
-    timers.clear();
-    for (const k of STATUS_KEYS) status[k] = false;
-    status.pump_a = true;
+function autoControl() {
+  if (mode !== 'auto' || !sensorOnline || !config.is_active) return;
+  const reading = sensorReadings();
+  if (!actuator.pump_a && !actuator.pump_b) {
+    actuator.pump_a = true;
+    wake();
+  }
+
+  const want = (key, state) => {
+    if (actuator[key] !== state) {
+      actuator[key] = state;
+      log(`[otomatis] ${key} ${state ? 'ON' : 'OFF'}`);
+      wake();
+    }
+  };
+  want('fan', reading.humidity >= config.fan_humidity || reading.temp_air >= config.fan_air_temp_max);
+  want('heater', reading.temp_air <= config.fan_air_temp_min);
+
+  // Jika aliran berada pada/di bawah ambang konfigurasi, pindah ke pompa utama cadangan.
+  if (config.waterflow > 0 && reading.waterflow <= config.waterflow && Date.now() - lastPumpSwitchAt > 15000) {
+    switchMainPump();
+  }
+
+  if (DOSING_KEYS.some((key) => actuator[key]) || Date.now() < nextDoseAt) return;
+  const duration = Math.min(config.peristaltic_pump_duration, MANUAL_MAX_DURATION);
+  const cooldownSec = FAST_DEMO ? Math.min(config.peristaltic_pump_period * 60, 20) : config.peristaltic_pump_period * 60;
+  let selected = null;
+  let afterFirst = null;
+
+  if (reading.ph < config.ph_down) selected = 'pump_ph_up';
+  else if (reading.ph > config.ph_up) selected = 'pump_ph_down';
+  else if (reading.ec < targetEc()) {
+    selected = 'pump_ec_a';
+    afterFirst = () => startDose('pump_ec_b', duration);
+  }
+  if (!selected) return;
+
+  log(`[otomatis] dosis ${selected} selama ${duration} detik`);
+  nextDoseAt = Date.now() + duration * 1000 * (afterFirst ? 2 : 1) + cooldownSec * 1000;
+  startDose(selected, duration, afterFirst);
+}
+
+function physicsTick() {
+  if (!sensorOnline) return;
+  const noise = (amplitude) => (Math.random() - 0.5) * amplitude;
+  const approach = (key, factor, amplitude) => {
+    if (sensorOverrides.has(key)) return;
+    values[key] += (sensorTargets[key] - values[key]) * factor + noise(amplitude);
+  };
+
+  approach('ph', 0.02, 0.015);
+  approach('ec', 0.015, 0.008);
+  approach('temp_water', 0.02, 0.04);
+  approach('temp_air', 0.02, 0.08);
+  approach('humidity', 0.02, 0.25);
+
+  if (!sensorOverrides.has('ph')) {
+    if (actuator.pump_ph_up) values.ph += 0.035;
+    if (actuator.pump_ph_down) values.ph -= 0.035;
+  }
+  if (!sensorOverrides.has('ec') && (actuator.pump_ec_a || actuator.pump_ec_b)) values.ec += 0.018;
+  if (!sensorOverrides.has('temp_air')) {
+    if (actuator.heater) values.temp_air += 0.10;
+    if (actuator.fan) values.temp_air -= 0.08;
+  }
+  if (!sensorOverrides.has('humidity') && actuator.fan) values.humidity -= 0.20;
+
+  if (!sensorOverrides.has('waterflow')) {
+    values.waterflow = actuator.pump_a || actuator.pump_b ? 2.5 + noise(0.2) : 0;
+  }
+  values.ph = Math.min(14, Math.max(0, values.ph));
+  values.ec = Math.min(20, Math.max(0, values.ec));
+  values.humidity = Math.min(100, Math.max(0, values.humidity));
+  values.temp_water = Math.min(80, Math.max(-10, values.temp_water));
+  values.temp_air = Math.min(100, Math.max(-20, values.temp_air));
+}
+
+function setSensorOnline(next) {
+  if (sensorOnline === next) return;
+  sensorOnline = next;
+  log(`Sensor ${sensorOnline ? 'online' : 'offline'}`);
+  if (!sensorOnline && mode === 'auto') {
+    stopNonMainActuators();
+    actuator.pump_a = true;
+    actuator.pump_b = false;
   }
   wake();
 }
 
-// ------------------------------------------------------------------ MQTT
-function buildTelemetry() {
-  const t = {};
-  if (sensorOnline) {
-    const digits = { ec: 2, ph: 2, temp_water: 1, temp_air: 1, humidity: 0, waterflow: 2 };
-    for (const k of VALUE_KEYS) t[k] = round(values[k], digits[k]);
-  }
-  for (const k of STATUS_KEYS) t[k] = Boolean(status[k]);
-  t.sensor_online = sensorOnline;
-  t.mode = autoMode ? 'auto' : 'manual';
-  return t;
+function getState() {
+  return {
+    ok: true,
+    device: 'Tanova Grove 1 (simulator)',
+    mode,
+    sensor_online: sensorOnline,
+    status: { ...actuator },
+    values: sensorOnline ? sensorReadings() : {},
+    calibration: Object.fromEntries(Object.entries(calibrationState).map(([key, value]) => [key, { ...value }])),
+    config: buildClientAttributes(),
+    wifi: { configured: Boolean(wifiSsid && wifiPasswordConfigured), ssid: wifiSsid || null },
+  };
 }
 
-function buildAttributes() {
-  const attrs = Object.fromEntries(CONFIG_KEYS.filter((k) => k in config).map((k) => [k, config[k]]));
-  attrs.mode = autoMode ? 'auto' : 'manual';
-  attrs.config_errors = { ...configErrors };
-  return attrs;
+function handleRpc(payload) {
+  try {
+    const method = payload?.method;
+    let params = payload?.params;
+    if (typeof params === 'string') params = JSON.parse(params);
+    if (params === undefined || params === null) params = {};
+    if (typeof params !== 'object' || Array.isArray(params)) return { ok: false, error: 'params harus objek JSON' };
+
+    if (method === 'setActuator') return setActuator(params);
+    if (method === 'setMode') return setMode(params.mode);
+    if (method === 'setConfig') {
+      const result = applyConfig(params);
+      const ok = Object.keys(result.rejected).length === 0
+        && (Object.keys(result.valid).length > 0 || Object.keys(result.unknown).length === 0);
+      return { ok, applied: result.valid, rejected: result.rejected, unknown: result.unknown,
+        ...(!ok ? { error: 'sebagian atau seluruh konfigurasi ditolak' } : {}) };
+    }
+    if (method === 'getState') return getState();
+    if (method === 'calibrate') {
+      const sensor = normalizeCalibrationSensor(params.sensor || params.key);
+      if (!Object.hasOwn(calibrationState, sensor)) {
+        return { ok: false, simulated: true, error: `sensor kalibrasi tidak dikenal: ${sensor || '(kosong)'}` };
+      }
+      const profile = calculateCalibrationProfile(params.reference_values);
+      if (profile.error) return { ok: false, simulated: true, error: profile.error };
+      const calibratedAt = Date.now();
+      const effective = composeCalibrationProfiles(calibrationState[sensor], profile);
+      calibrationState[sensor] = {
+        calibrated: true,
+        calibrated_at: calibratedAt,
+        scale: effective.scale,
+        offset: effective.offset,
+        reference_values: { points: profile.points },
+      };
+      persistCalibrationState();
+      log(`[simulator] kalibrasi ${sensor} diterapkan dan disimpan: scale=${round(effective.scale, 6)}, offset=${round(effective.offset, 6)}`);
+      wake();
+      return {
+        ok: true, simulated: true, sensor, calibrated: true,
+        calibrated_at: calibratedAt,
+        profile: { scale: effective.scale, offset: effective.offset },
+        message: 'Profil koreksi sensor simulasi berhasil diperbarui. Ini simulasi kalibrasi, bukan kalibrasi fisik.',
+      };
+    }
+    return { ok: false, error: `method '${method}' tidak dikenal` };
+  } catch (error) {
+    return { ok: false, error: `galat simulator: ${error.message}` };
+  }
+}
+
+function applySharedAttributes(payload) {
+  const shared = payload?.shared && typeof payload.shared === 'object' ? payload.shared : payload;
+  if (!shared || typeof shared !== 'object' || Array.isArray(shared)) return;
+  const updates = {};
+  for (const key of REMOTE_KEYS) {
+    if (key in shared) updates[key] = shared[key];
+  }
+  if (Object.keys(updates).length) applyConfig(updates);
+
+  if (typeof shared.wifi_ssid === 'string') {
+    wifiSsid = shared.wifi_ssid;
+    log(`Konfigurasi Wi-Fi diterima (SSID: ${wifiSsid || '(kosong)'}).`);
+  }
+  if (typeof shared.wifi_password === 'string') {
+    wifiPasswordConfigured = shared.wifi_password.length > 0;
+    // Password sengaja tidak dicetak ke terminal dan tidak dipublish sebagai client attribute.
+    log('Password Wi-Fi diterima oleh simulator (nilai disembunyikan).');
+  }
+}
+
+function publishSharedAttributeRequest() {
+  publish(T.attributesRequest, { sharedKeys: [...REMOTE_KEYS, 'wifi_ssid', 'wifi_password'].join(',') });
 }
 
 const client = mqtt.connect({
-  protocol: TLS ? 'mqtts' : 'mqtt', host: HOST, port: PORT, username: TOKEN,
-  clientId: `tanova-simulator-${Math.random().toString(16).slice(2, 8)}`, keepalive: 60, reconnectPeriod: 5000,
+  protocol: TLS ? 'mqtts' : 'mqtt',
+  host: HOST,
+  port: PORT,
+  username: TOKEN,
+  clientId: `tanova-grove1-sim-${Math.random().toString(16).slice(2, 8)}`,
+  keepalive: 60,
+  reconnectPeriod: 5000,
+  connectTimeout: 20_000,
 });
-
-let connected = false;
-const sendTelemetry = () => connected && client.publish(T.telemetry, JSON.stringify({ ts: Date.now(), values: buildTelemetry() }), { qos: 1 });
-const sendAttributes = () => connected && client.publish(T.attrs, JSON.stringify(buildAttributes()), { qos: 1 });
-let wakeTimer = null;
-function wake() { // kirim segera (digabung agar tidak membanjiri)
-  clearTimeout(wakeTimer);
-  wakeTimer = setTimeout(() => { sendTelemetry(); sendAttributes(); }, 200);
-}
 
 client.on('connect', () => {
   connected = true;
   log(`Terhubung ke ThingsBoard ${HOST}:${PORT}${TLS ? ' (TLS)' : ''}`);
-  client.subscribe([T.rpcReq + '+', T.attrs, T.attrsResp + '+'], { qos: 1 });
-  client.publish(T.attrsReq, JSON.stringify({ sharedKeys: REMOTE_KEYS.join(',') }), { qos: 1 });
-  sendAttributes();
-  sendTelemetry();
+  client.subscribe([TOPIC.rpcRequest + '+', TOPIC.attributes, TOPIC.attributesResponse + '+'], { qos: 1 });
+  publishSharedAttributeRequest();
+  publishClientAttributes();
+  publishTelemetry();
 });
-client.on('close', () => { if (connected) log('Koneksi ke ThingsBoard terputus, mencoba lagi...'); connected = false; });
-client.on('error', (err) => log(`Galat MQTT: ${err.message}${/not authorized|Bad username/i.test(err.message) ? ' (periksa THINGSBOARD_TOKEN)' : ''}`));
-
-client.on('message', (topic, buf) => {
+client.on('reconnect', () => log('Mencoba menyambung kembali ke ThingsBoard...'));
+client.on('close', () => {
+  if (connected) log('Koneksi ThingsBoard terputus.');
+  connected = false;
+});
+client.on('error', (error) => {
+  log(`Galat MQTT: ${error.message}${/not authorized|Bad username/i.test(error.message) ? ' (periksa THINGSBOARD_TOKEN)' : ''}`);
+});
+client.on('message', (topic, buffer) => {
   let payload;
-  try { payload = JSON.parse(buf.toString() || '{}'); } catch { return; }
-  if (topic.startsWith(T.rpcReq)) {
-    const id = topic.slice(T.rpcReq.length);
+  try {
+    payload = JSON.parse(buffer.toString() || '{}');
+  } catch {
+    log(`Payload JSON tidak valid dari ${topic}`);
+    return;
+  }
+
+  if (topic.startsWith(TOPIC.rpcRequest)) {
+    const requestId = topic.slice(TOPIC.rpcRequest.length);
     const result = handleRpc(payload);
-    log(`RPC ${id} ${payload.method}: ${result.ok ? 'OK' : result.error || JSON.stringify(result.rejected)}`);
-    client.publish(T.rpcRes + id, JSON.stringify(result), { qos: 1 });
-  } else if (topic.startsWith(T.attrsResp)) {
-    applyRemoteConfig(payload.shared || {});
-  } else if (topic === T.attrs) {
-    applyRemoteConfig(payload.shared || payload);
+    log(`RPC ${requestId} ${payload.method || '(tanpa method)'}: ${result.ok ? 'OK' : result.error || JSON.stringify(result.rejected || {})}`);
+    publish(TOPIC.rpcResponse + requestId, result);
+  } else if (topic.startsWith(TOPIC.attributesResponse) || topic === TOPIC.attributes) {
+    applySharedAttributes(payload);
   }
 });
 
-setInterval(physics, 2000);
-setInterval(autoControl, 5000);
-setInterval(sendTelemetry, INTERVAL * 1000);
-setInterval(sendAttributes, 60_000);
+const physicsTimer = setInterval(physicsTick, PHYSICS_TICK_MS);
+const autoTimer = setInterval(autoControl, AUTO_TICK_MS);
+const telemetryTimer = setInterval(publishTelemetry, INTERVAL * 1000);
+const attributesTimer = setInterval(publishClientAttributes, 60_000);
 
-// ------------------------------------------------------------------ perintah terminal
-const HELP = `Perintah:
-  status                 tampilkan keadaan saat ini
-  set <kunci> <nilai>    atur nilai sensor (ph, ec, temp_water, temp_air, humidity, waterflow)
-                         contoh: set ph 4.8   (berguna untuk memicu peringatan)
-  sensor off|on          putuskan / sambungkan sensor
-  help                   bantuan ini
-  quit                   keluar`;
-console.log(`Simulator Tanova dimulai. Mode awal: ${autoMode ? 'auto' : 'manual'}. Ketik "help" untuk perintah.`);
-readline.createInterface({ input: process.stdin }).on('line', (line) => {
-  const [cmd, a, b] = line.trim().split(/\s+/);
-  if (cmd === 'status') {
-    console.log(JSON.stringify({ mode: autoMode ? 'auto' : 'manual', sensor_online: sensorOnline, nilai: Object.fromEntries(VALUE_KEYS.map((k) => [k, round(values[k], 2)])), aktuator_menyala: STATUS_KEYS.filter((k) => status[k]) }, null, 1));
-  } else if (cmd === 'set' && VALUE_KEYS.includes(a) && Number.isFinite(Number(b))) {
-    values[a] = base[a] = Number(b);
-    log(`${a} diatur ke ${b}`);
-    wake();
-  } else if (cmd === 'sensor' && (a === 'on' || a === 'off')) {
-  setSensorOnline(a === 'on');
-  } else if (cmd === 'auto') {
-    switchMode('auto');
-    wake();
-  } else if (cmd === 'manual') {
-    switchMode('manual');
-    wake();
-  } else if (cmd === 'quit') {
-    client.end(true, () => process.exit(0));
-  } else if (cmd) {
+async function sendCameraImage(filePath) {
+  if (!CAMERA_API_KEY) {
+    console.log('CAMERA_API_KEY belum diisi di simulator/.env.');
+    return;
+  }
+  if (!CAMERA_DEVICE_ID) {
+    console.log('CAMERA_DEVICE_ID belum diisi di simulator/.env (ID device backend TANOVA).');
+    return;
+  }
+  const absolutePath = path.resolve(filePath.replace(/^['"]|['"]$/g, ''));
+  if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+    console.log(`File gambar tidak ditemukan: ${absolutePath}`);
+    return;
+  }
+  const ext = path.extname(absolutePath).toLowerCase();
+  const mime = ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' })[ext];
+  if (!mime) {
+    console.log('Format foto harus JPG, PNG, atau WebP.');
+    return;
+  }
+  const bytes = fs.readFileSync(absolutePath);
+  const form = new FormData();
+  form.append('image', new Blob([bytes], { type: mime }), path.basename(absolutePath));
+  if (CAMERA_DEVICE_ID) form.append('device_id', CAMERA_DEVICE_ID);
+  log(`Mengirim foto ke backend TANOVA untuk analisis Gemini: ${path.basename(absolutePath)}`);
+  try {
+    const response = await fetch(CAMERA_BACKEND_URL, {
+      method: 'POST',
+      headers: { 'x-api-key': CAMERA_API_KEY },
+      body: form,
+      signal: AbortSignal.timeout(90000),
+    });
+    const body = await response.json().catch(() => ({}));
+    console.log(JSON.stringify({ http_status: response.status, ...body }, null, 2));
+  } catch (error) {
+    console.log(`Upload kamera gagal: ${error.message}`);
+  }
+}
+
+const HELP = `Perintah simulator Tanova Grove 1:
+  status                         lihat mode, sensor, konfigurasi, dan relay
+  set <sensor> <angka>           ubah target sensor (ph, ec, temp_water, temp_air, humidity, waterflow)
+  sensor on|off                  hidupkan/matikan data sensor
+  mode auto|manual               ganti mode perangkat
+  actuator <key> on|off [detik]  uji aktuator saat mode manual
+  config <JSON>                  ubah konfigurasi seperti RPC setConfig
+  calibrate <sensor> <measured> <reference>  demo kalibrasi satu titik
+  camera <path-gambar>           kirim foto uji ke backend untuk dianalisis Gemini
+  help                           tampilkan bantuan
+  quit                           hentikan simulator
+
+Contoh:
+  set ph 4.8
+  set waterflow 0.1
+  actuator pump_ph_up on 5
+  config {"ec":2.2,"ph_down":5.5,"ph_up":6.5}
+  camera ./contoh-daun.jpg
+  mode auto`;
+
+function printStatus() {
+  console.log(JSON.stringify({
+    device: 'Tanova Grove 1 (simulator)',
+    connected_to_thingsboard: connected,
+    mode,
+    sensor_online: sensorOnline,
+    sensors: sensorOnline ? Object.fromEntries(SENSOR_KEYS.map((key) => [key, round(sensorReadings()[key])])) : 'offline',
+    calibration: calibrationState,
+    actuators: actuator,
+    config: buildClientAttributes(),
+    wifi: { configured: Boolean(wifiSsid && wifiPasswordConfigured), ssid: wifiSsid || null },
+  }, null, 2));
+}
+
+function parseValue(raw) {
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  try { return JSON.parse(raw); } catch { return raw; }
+}
+
+async function shutdown() {
+  if (stopping) return;
+  stopping = true;
+  clearInterval(physicsTimer);
+  clearInterval(autoTimer);
+  clearInterval(telemetryTimer);
+  clearInterval(attributesTimer);
+  clearTimeout(wakeTimer);
+  for (const key of DOSING_KEYS) cancelDose(key);
+  log('Simulator dihentikan.');
+  client.end(true, () => process.exit(0));
+  setTimeout(() => process.exit(0), 1500).unref();
+}
+
+console.log(`Tanova Grove 1 simulator aktif. Mode awal: ${mode}. ThingsBoard: ${HOST}:${PORT}. Ketik "help".`);
+const terminal = readline.createInterface({ input: process.stdin, output: process.stdout });
+terminal.on('line', (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  const firstSpace = trimmed.indexOf(' ');
+  const command = firstSpace < 0 ? trimmed : trimmed.slice(0, firstSpace);
+  const rest = firstSpace < 0 ? '' : trimmed.slice(firstSpace + 1).trim();
+
+  if (command === 'help') {
     console.log(HELP);
+  } else if (command === 'status') {
+    printStatus();
+  } else if (command === 'sensor') {
+    if (rest === 'on' || rest === 'off') setSensorOnline(rest === 'on');
+    else console.log('Gunakan: sensor on|off');
+  } else if (command === 'mode') {
+    const result = setMode(rest);
+    if (!result.ok) console.log(result.error);
+  } else if (command === 'auto' || command === 'manual') {
+    const result = setMode(command);
+    if (!result.ok) console.log(result.error);
+  } else if (command === 'set') {
+    const [key, raw] = rest.split(/\s+/, 2);
+    if (!SENSOR_KEYS.includes(key) || raw === undefined || !Number.isFinite(Number(raw))) {
+      console.log(`Sensor yang bisa diubah: ${SENSOR_KEYS.join(', ')}`);
+    } else {
+      const value = Number(raw);
+      values[key] = value;
+      sensorTargets[key] = value;
+      sensorOverrides.add(key);
+      log(`Nilai simulasi ${key} diatur ke ${value}`);
+      wake();
+    }
+  } else if (command === 'calibration') {
+    const [action, sensorRaw] = rest.split(/\s+/);
+    if (action !== 'reset') {
+      console.log('Gunakan: calibration reset [sensor|all]');
+    } else {
+      const selected = sensorRaw && sensorRaw !== 'all'
+        ? [normalizeCalibrationSensor(sensorRaw)]
+        : [...CALIBRATION_KEYS];
+      const unknown = selected.find((key) => !Object.hasOwn(calibrationState, key));
+      if (unknown) {
+        console.log(`Sensor kalibrasi tidak dikenal: ${unknown}`);
+      } else {
+        for (const key of selected) {
+          calibrationState[key] = {
+            calibrated: true, calibrated_at: Date.now(), scale: 1, offset: 0,
+            reference_values: { method: 'demo-default', points: [] },
+          };
+        }
+        persistCalibrationState();
+        log(`Profil kalibrasi direset: ${selected.join(', ')}`);
+        wake();
+      }
+    }
+  } else if (command === 'calibrate') {
+    const [sensorRaw, measuredRaw, referenceRaw] = rest.split(/\s+/);
+    const sensor = normalizeCalibrationSensor(sensorRaw);
+    const measured = Number(measuredRaw);
+    const reference = Number(referenceRaw);
+    if (!Object.hasOwn(calibrationState, sensor) || !Number.isFinite(measured) || !Number.isFinite(reference)) {
+      console.log('Gunakan: calibrate <ph|ec|water_temp|temp_air|humidity|waterflow> <nilai_terukur> <nilai_referensi>');
+    } else {
+      const result = handleRpc({ method: 'calibrate', params: { sensor, reference_values: { points: [{ measured, reference }] } } });
+      console.log(JSON.stringify(result, null, 2));
+    }
+  } else if (command === 'actuator') {
+    const [key, state, seconds] = rest.split(/\s+/);
+    if (!ACTUATOR_KEYS.includes(key) || !['on', 'off'].includes(state)) {
+      console.log(`Gunakan: actuator <${ACTUATOR_KEYS.join('|')}> on|off [detik]`);
+    } else {
+      const result = setActuator({ actuator: key, state: state === 'on', ...(seconds ? { duration: Number(seconds) } : {}) });
+      console.log(JSON.stringify(result));
+    }
+  } else if (command === 'camera') {
+    if (!rest) console.log('Gunakan: camera <path-gambar>');
+    else void sendCameraImage(rest);
+  } else if (command === 'config') {
+    try {
+      const parsed = JSON.parse(rest);
+      const result = applyConfig(parsed);
+      console.log(JSON.stringify({ applied: result.valid, rejected: result.rejected, unknown: result.unknown }, null, 2));
+    } catch (error) {
+      console.log(`JSON konfigurasi tidak valid: ${error.message}`);
+    }
+  } else if (command === 'quit' || command === 'exit') {
+    shutdown();
+  } else {
+    console.log('Perintah tidak dikenal. Ketik "help".');
   }
 });
-process.on('SIGINT', () => client.end(true, () => process.exit(0)));
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

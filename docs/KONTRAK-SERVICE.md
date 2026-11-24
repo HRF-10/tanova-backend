@@ -1,6 +1,6 @@
 # Kontrak antara backend dan service
 
-Dokumen ini adalah satu-satunya acuan untuk service (Raspberry Pi atau simulator). **Backend tidak diubah saat service diganti. Service yang menyesuaikan diri dengan kontrak ini.** Simulator di folder `simulator` sudah memenuhi seluruh kontrak, jadi bisa dipakai sebagai contoh dan pembanding.
+Dokumen ini adalah satu-satunya acuan untuk service (Raspberry Pi atau simulator). **Backend tidak diubah saat service diganti. Service yang menyesuaikan diri dengan kontrak ini.** Simulator di folder `simulator` mengikuti kontrak utama dan menambahkan dukungan kalibrasi demo yang opsional, jadi bisa dipakai sebagai contoh dan pembanding.
 
 Isi kontrak dalam bentuk kode ada di `src/config/contract.js`. Bila suatu saat kontrak memang harus diubah, itu satu-satunya file backend yang disentuh.
 
@@ -94,7 +94,8 @@ Params: objek berisi sebagian atau semua key pada bagian 5.
 
 - `setMode` dengan params `{"mode": "auto"|"manual"}`. Mode juga bisa lewat atribut shared.
 - `getState` mengembalikan `{"ok": true, "mode", "sensor_online", "status", "values", "config"}`. Berguna untuk membandingkan service dengan simulator.
-- `calibrate` belum dipakai service asli. Jika tidak didukung, balas `ok: false` dengan `error`.
+- `calibrate` didukung simulator untuk demo. Params: `{"sensor":"ph","key":"ph","reference_values":{"points":[{"measured":6.2,"reference":6.86},{"measured":4.2,"reference":4.01}]}}`. Simulator menghitung koreksi affine `hasil = measured * scale + offset`, menerapkannya ke telemetri, dan menyimpan profil ke `simulator/calibration-state.json` agar bertahan setelah restart. Satu titik mengoreksi offset; dua atau lebih titik menghitung scale dan offset. Kalibrasi ulang dikomposisikan dengan profil sebelumnya.
+- Firmware fisik hanya boleh menerima RPC `calibrate` jika implementasi firmware memang mendukung penyimpanan koefisien (misalnya EEPROM). Jika belum didukung, balas `ok: false`; backend tidak akan mencatat kalibrasi sebagai berhasil saat RPC ditolak.
 
 ## 7. Perilaku yang diharapkan
 
