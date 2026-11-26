@@ -16,8 +16,8 @@ export async function up(knex) {
     await knex.raw('alter table ?? enable row level security', ['password_reset_tokens']);
     await knex.raw(`
       do $$ begin
-        if exists (select 1 from pg_roles where rolname = 'anon') then execute 'revoke all on table public.password_reset_tokens from anon'; end if;
-        if exists (select 1 from pg_roles where rolname = 'authenticated') then execute 'revoke all on table public.password_reset_tokens from authenticated'; end if;
+        if exists (select 1 from pg_roles where rolname = 'anon') then execute format('revoke all on table %I.password_reset_tokens from anon', current_schema()); end if;
+        if exists (select 1 from pg_roles where rolname = 'authenticated') then execute format('revoke all on table %I.password_reset_tokens from authenticated', current_schema()); end if;
       end $$;
     `);
   }

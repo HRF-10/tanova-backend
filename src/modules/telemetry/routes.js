@@ -12,7 +12,7 @@ import { parseJson } from '../../lib/json.js';
 import { getHistory } from '../../services/telemetry.js';
 
 const tags = ['Telemetry & Logs'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 
 const historyQuery = {
   type: 'object',

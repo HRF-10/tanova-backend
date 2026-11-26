@@ -14,7 +14,7 @@ import { forgetSessions, tbFor } from '../../services/thingsboard.js';
 import { METRICS } from '../../config/metrics.js';
 
 const tags = ['Devices'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const SENSOR_TYPES = ['ph', 'ec', 'tds', 'water_temp', 'air_temp', 'humidity', 'waterflow', 'tank_level', 'other'];
 const ACTUATOR_TYPES = ['pump', 'dosing_pump', 'valve', 'fan', 'heater', 'light', 'other'];
 const idParam = { type: 'object', properties: { id: { type: 'string' } } };

@@ -10,7 +10,7 @@ import { logActivity } from '../../lib/activity.js';
 import { userWithGreenhouse } from './service.js';
 
 const tags = ['Users & Profile'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const adminOnly = (app) => [app.authenticate, app.requireRole('admin')];
 const usernameSchema = { type: 'string', minLength: 3, maxLength: 80, pattern: '^[a-zA-Z0-9_.-]+$' };
 

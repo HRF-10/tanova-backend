@@ -28,7 +28,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
   const app = Fastify({
     logger: logger && {
       level: env.isProd ? 'info' : 'debug',
-      redact: ['req.headers.authorization'],
+      redact: ['req.headers.authorization', "req.headers['x-api-key']"],
     },
     trustProxy: true,
     bodyLimit: 1_048_576,
@@ -60,6 +60,7 @@ export async function buildApp({ logger = true, startJobs = true } = {}) {
       components: {
         securitySchemes: {
           bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          apiKeyAuth: { type: 'apiKey', in: 'header', name: 'x-api-key', description: 'API key user (didapat dari POST /auth/login)' },
           cameraKey: { type: 'apiKey', in: 'header', name: 'x-api-key', description: 'Kunci kamera ESP32 (CAMERA_API_KEY di .env)' },
         },
       },

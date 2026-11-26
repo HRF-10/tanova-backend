@@ -18,7 +18,7 @@ import { analyzeWithGemini, getGeminiHealth } from '../../services/aiService.js'
 import { sniffMime, saveImage } from '../../services/imageStore.js';
 
 const tags = ['Tanova AI'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const idParam = { type: 'object', properties: { id: { type: 'string' } } };
 const CATEGORIES = ['leaf_health', 'nutrient', 'pest', 'disease', 'other'];
 const SEVERITIES = ['none', 'low', 'medium', 'high'];
@@ -61,14 +61,11 @@ export default async function aiRoutes(app) {
     return { total: Number(total), limit, offset, data: rows.map(diagnosisDto) };
   });
 
-  // ESP32 kirim x-api-key (CAMERA_API_KEY); aplikasi kirim Bearer token seperti biasa.
+  // ESP32 kirim x-api-key (CAMERA_API_KEY); user kirim Bearer token atau x-api-key miliknya.
   const hash = (v) => crypto.createHash('sha256').update(String(v)).digest();
   const cameraOrUser = async (request) => {
     const key = request.headers['x-api-key'];
-    if (key) {
-      if (!env.ai.cameraApiKey || !crypto.timingSafeEqual(hash(key), hash(env.ai.cameraApiKey))) {
-        throw httpError(401, 'API key kamera tidak valid', 'INVALID_API_KEY');
-      }
+    if (key && env.ai.cameraApiKey && crypto.timingSafeEqual(hash(key), hash(env.ai.cameraApiKey))) {
       request.isCamera = true;
       return;
     }
