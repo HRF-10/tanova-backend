@@ -1,10 +1,32 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/env.js';
 import { httpError } from '../lib/errors.js';
-import { newId } from '../lib/ids.js';
 
 const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+
+// Format nama file: <nama_akun>-<YYYY-MM-DD>-<HHmmss>[_n]<ext>
+export function buildImageName(account, ext, uploadDir = env.uploadDir) {
+  const safeAccount =
+    String(account || 'tanova')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'tanova';
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const base = `${safeAccount}-${date}-${time}`;
+
+  let name = `${base}${ext}`;
+  let idx = 1;
+  while (fsSync.existsSync(path.resolve(uploadDir, name))) {
+    name = `${base}-${idx++}${ext}`;
+  }
+  return name;
+}
 
 // Tentukan tipe gambar dari isi file, bukan dari header (ESP32 sering salah mengirim Content-Type).
 export function sniffMime(buf) {
@@ -16,8 +38,8 @@ export function sniffMime(buf) {
 }
 
 // Simpan ke Supabase Storage jika SUPABASE_URL dan SUPABASE_SERVICE_KEY diisi, selain itu ke folder uploads/.
-export async function saveImage(buffer, mime) {
-  const name = `${newId()}${EXT[mime]}`;
+export async function saveImage(buffer, mime, account) {
+  const name = buildImageName(account, EXT[mime]);
   const { url, serviceKey, bucket } = env.supabase;
 
   if (url && serviceKey) {

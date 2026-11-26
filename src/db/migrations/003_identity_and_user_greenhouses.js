@@ -32,8 +32,8 @@ export async function up(knex) {
     await knex.raw('alter table ?? enable row level security', ['user_greenhouses']);
     await knex.raw(`
       do $$ begin
-        if exists (select 1 from pg_roles where rolname = 'anon') then execute 'revoke all on table public.user_greenhouses from anon'; end if;
-        if exists (select 1 from pg_roles where rolname = 'authenticated') then execute 'revoke all on table public.user_greenhouses from authenticated'; end if;
+        if exists (select 1 from pg_roles where rolname = 'anon') then execute format('revoke all on table %I.user_greenhouses from anon', current_schema()); end if;
+        if exists (select 1 from pg_roles where rolname = 'authenticated') then execute format('revoke all on table %I.user_greenhouses from authenticated', current_schema()); end if;
       end $$;
     `);
   }

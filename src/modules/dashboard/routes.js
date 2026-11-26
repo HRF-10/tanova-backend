@@ -7,7 +7,7 @@ import { emptyMetrics, getConnectionStatus, getLatestMetrics, withLiveActuatorSt
 import { httpError } from '../../lib/errors.js';
 
 const tags = ['Dashboard'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 
 export default async function dashboardRoutes(app) {
   const ro = [app.authenticate];

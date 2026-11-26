@@ -11,11 +11,11 @@ import { RPC } from '../../config/contract.js';
 import { sendCommand } from '../../services/deviceCommand.js';
 
 const tags = ['Calibrations'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 
 export default async function calibrationRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin')];
+  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
 
   async function loadSensor(id, scope) {
     const q = db('sensors').join('devices', 'devices.id', 'sensors.device_id').where('sensors.id', id);

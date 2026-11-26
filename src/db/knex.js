@@ -23,13 +23,23 @@ export const db = knex({
     // (koneksi tetap terenkripsi).
     ssl: env.db.ssl ? { rejectUnauthorized: false } : false,
   },
+  searchPath: [env.db.schema],
+  migrations: { schemaName: env.db.schema },
   pool: { min: 0, max: env.db.poolMax },
 });
 
+async function ensureSchema() {
+  if (env.db.schema && env.db.schema !== 'public') {
+    await db.raw('CREATE SCHEMA IF NOT EXISTS ??', [env.db.schema]);
+  }
+}
+
 export async function migrateLatest() {
-  return db.migrate.latest({ directory: migrationsDir, loadExtensions: ['.js'] });
+  await ensureSchema();
+  return db.migrate.latest({ directory: migrationsDir, loadExtensions: ['.js'], schemaName: env.db.schema });
 }
 
 export async function migrateRollback() {
-  return db.migrate.rollback({ directory: migrationsDir, loadExtensions: ['.js'] });
+  await ensureSchema();
+  return db.migrate.rollback({ directory: migrationsDir, loadExtensions: ['.js'], schemaName: env.db.schema });
 }

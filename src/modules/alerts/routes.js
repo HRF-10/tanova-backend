@@ -11,7 +11,7 @@ import { logActivity } from '../../lib/activity.js';
 import { evaluateRulesOnce } from '../../services/alertEngine.js';
 
 const tags = ['Alerts & Notifications'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const idParam = { type: 'object', properties: { id: { type: 'string' } } };
 
 const ruleProps = {
@@ -29,7 +29,7 @@ const ruleDto = (r) => dto(r);
 
 export default async function alertRoutes(app) {
   const ro = [app.authenticate];
-  const rw = [app.authenticate, app.requireRole('admin')];
+  const rw = [app.authenticate, app.requireRole('admin', 'operator')];
 
   async function loadRule(id, scope) {
     const q = db('alert_rules').where({ id });
@@ -148,6 +148,22 @@ export default async function alertRoutes(app) {
     if (!ev) throw httpError(404, 'Notifikasi tidak ditemukan', 'NOTIFICATION_NOT_FOUND');
     if (!ev.read_at) await db('alert_events').where({ id: ev.id }).update({ read_at: now() });
     return dto(await db('alert_events').where({ id: ev.id }).first());
+  });
+
+  app.delete('/alerts/notifications/:id', { onRequest: rw, schema: { tags, security, summary: 'Hapus satu notifikasi', params: idParam } }, async (request, reply) => {
+    const scope = ghScope(request);
+    const q = db('alert_events').where({ id: request.params.id });
+    if (scope) q.andWhere({ greenhouse_id: scope });
+    const deleted = await q.delete();
+    if (!deleted) throw httpError(404, 'Notifikasi tidak ditemukan', 'NOTIFICATION_NOT_FOUND');
+    return reply.code(204).send();
+  });
+
+  app.delete('/alerts/notifications', { onRequest: rw, schema: { tags, security, summary: 'Hapus semua notifikasi milik greenhouse', querystring: { type: 'object', properties: { greenhouse_id: { type: 'string' } } } } }, async (request) => {
+    const scope = ghScope(request);
+    const q = db('alert_events');
+    if (scope) q.where({ greenhouse_id: scope });
+    return { deleted: await q.delete() };
   });
 }
 

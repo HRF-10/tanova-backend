@@ -25,6 +25,7 @@ export const env = {
   db: {
     // Connection string PostgreSQL dari Supabase (Project Settings > Database > Connection string)
     url: process.env.DATABASE_URL || '',
+    schema: process.env.DB_SCHEMA || 'public',
     // Supabase mewajibkan SSL. Ubah ke false hanya untuk PostgreSQL lokal tanpa SSL.
     ssl: bool(process.env.DB_SSL, true),
     poolMax: int(process.env.DB_POOL_MAX, 5),

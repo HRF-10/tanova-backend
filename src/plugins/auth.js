@@ -1,8 +1,11 @@
 import fp from 'fastify-plugin';
 import jwt from '@fastify/jwt';
+import { createHash } from 'node:crypto';
 import { env } from '../config/env.js';
 import { db } from '../db/knex.js';
 import { httpError } from '../lib/errors.js';
+
+const hashKey = (key) => createHash('sha256').update(String(key)).digest('hex');
 
 export default fp(async (app) => {
   await app.register(jwt, {
@@ -17,15 +20,24 @@ export default fp(async (app) => {
 
   app.decorateRequest('auth', null);
 
-  // Verifikasi token, lalu muat user terbaru dari database (role & status aktif selalu up to date).
+  // Verifikasi Bearer JWT atau x-api-key milik user, lalu muat user terbaru beserta greenhouse_ids.
   app.decorate('authenticate', async (request) => {
-    try {
-      await request.jwtVerify();
-    } catch {
-      throw httpError(401, 'Token tidak valid atau sudah kedaluwarsa', 'UNAUTHORIZED');
+    const apiKey = request.headers['x-api-key'];
+    let user;
+    if (apiKey && !request.headers.authorization) {
+      user = await db('users').where({ api_key_hash: hashKey(apiKey) }).first();
+      if (!user || !user.is_active) throw httpError(401, 'API key tidak valid atau akun dinonaktifkan', 'INVALID_API_KEY');
+    } else {
+      try {
+        await request.jwtVerify();
+      } catch {
+        throw httpError(401, 'Token tidak valid atau sudah kedaluwarsa', 'UNAUTHORIZED');
+      }
+      user = await db('users').where({ id: request.user.sub }).first();
+      if (!user || !user.is_active || Number(request.user.ver ?? 0) !== Number(user.token_version ?? 0)) {
+        throw httpError(401, 'Token tidak berlaku. Silakan login kembali.', 'UNAUTHORIZED');
+      }
     }
-    const user = await db('users').where({ id: request.user.sub }).first();
-    if (!user || !user.is_active || Number(request.user.ver ?? 0) !== Number(user.token_version ?? 0)) throw httpError(401, 'Token tidak berlaku. Silakan login kembali.', 'UNAUTHORIZED');
     const assignments = await db('user_greenhouses').where({ user_id: user.id }).pluck('greenhouse_id').catch(() => []);
     request.auth = { ...user, greenhouse_ids: assignments.length ? assignments : (user.greenhouse_id ? [user.greenhouse_id] : []) };
   });

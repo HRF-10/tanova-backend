@@ -7,7 +7,7 @@ import { ghScope } from '../../lib/scope.js';
 import { logActivity } from '../../lib/activity.js';
 
 const tags = ['Greenhouses'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const idParam = { type: 'object', required: ['id'], properties: { id: { type: 'string' } } };
 const greenhouseFields = {
   name: { type: 'string', minLength: 2, maxLength: 150 },

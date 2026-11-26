@@ -7,6 +7,7 @@ import { logActivity } from '../../lib/activity.js';
 import { newId } from '../../lib/ids.js';
 import { sendEmail } from '../../services/email.js';
 import { env } from '../../config/env.js';
+import { decrypt, encrypt } from '../../lib/crypto.js';
 import { userWithGreenhouse } from '../users/service.js';
 
 const tags = ['Auth'];
@@ -94,6 +95,7 @@ export default async function authRoutes(app) {
     config: strictLimit,
     schema: {
       tags, summary: 'Login menggunakan username dan password',
+      description: 'Mengembalikan access_token, refresh_token, api_key (header x-api-key untuk akses semua resource milik user), dan profil user.',
       body: {
         type: 'object', additionalProperties: false, required: ['username', 'password'],
         properties: {
@@ -109,10 +111,20 @@ export default async function authRoutes(app) {
     if (!valid) throw httpError(401, 'Username atau password salah', 'INVALID_CREDENTIALS');
     if (!user.is_active) throw httpError(403, 'Akun dinonaktifkan. Hubungi admin.', 'ACCOUNT_DISABLED');
     const t = now();
-    await db('users').where({ id: user.id }).update({ last_login_at: t });
+    let apiKey;
+    if (user.api_key_enc) {
+      try { apiKey = decrypt(user.api_key_enc); } catch { /* regenerasi jika kunci enkripsi berubah */ }
+    }
+    const userPatch = { last_login_at: t };
+    if (!apiKey) {
+      apiKey = `tnv_${randomBytes(24).toString('hex')}`;
+      userPatch.api_key_hash = createHash('sha256').update(apiKey).digest('hex');
+      userPatch.api_key_enc = encrypt(apiKey);
+    }
+    await db('users').where({ id: user.id }).update(userPatch);
     request.auth = user;
     await logActivity(request, { action: 'auth.login', entity: 'user', entity_id: user.id, description: `Login ${username}` });
-    return { ...app.issueTokens(user), user: await userWithGreenhouse({ ...user, last_login_at: t }) };
+    return { ...app.issueTokens(user), api_key: apiKey, user: await userWithGreenhouse({ ...user, last_login_at: t }) };
   });
 
   app.post('/auth/refresh', {
