@@ -18,7 +18,7 @@ export const env = {
   jwt: {
     accessSecret: process.env.JWT_SECRET || 'dev-access-secret-ganti-di-produksi',
     refreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-ganti-di-produksi',
-    accessExpires: process.env.JWT_ACCESS_EXPIRES || '12h',
+    accessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
     refreshExpires: process.env.JWT_REFRESH_EXPIRES || '7d',
   },
 
