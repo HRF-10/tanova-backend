@@ -21,7 +21,7 @@ Aturan penulisan:
 
 Saat pengguna login, backend memberi dua "tiket" digital yang disebut **token JWT**:
 
-- **Access token**: tiket yang dikirim aplikasi di setiap permintaan. Masa berlakunya pendek (`JWT_ACCESS_EXPIRES`, bawaan 12 jam).
+- **Access token**: tiket yang dikirim aplikasi di setiap permintaan. Masa berlakunya pendek (`JWT_ACCESS_EXPIRES`, bawaan 15 menit).
 - **Refresh token**: tiket cadangan yang lebih lama (`JWT_REFRESH_EXPIRES`, bawaan 7 hari). Dipakai untuk meminta access token baru tanpa login ulang.
 
 Supaya tiket tidak bisa dipalsukan, backend menandatanganinya dengan kunci rahasia: `JWT_SECRET` untuk access token dan `JWT_REFRESH_SECRET` untuk refresh token. Siapa pun yang tahu kunci itu bisa membuat tiket palsu, jadi kunci harus panjang, acak, dan rahasia. Karena itu pakai `npm run gen-secrets`, jangan mengarang sendiri.

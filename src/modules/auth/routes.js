@@ -112,7 +112,7 @@ export default async function authRoutes(app) {
     await db('users').where({ id: user.id }).update({ last_login_at: t });
     request.auth = user;
     await logActivity(request, { action: 'auth.login', entity: 'user', entity_id: user.id, description: `Login ${username}` });
-    return { ...app.issueTokens(user), user: await userWithGreenhouse({ ...user, last_login_at: t }) };
+    return { ...await app.issueTokens(user), user: await userWithGreenhouse({ ...user, last_login_at: t }) };
   });
 
   app.post('/auth/refresh', {
@@ -123,8 +123,51 @@ export default async function authRoutes(app) {
     try { payload = app.jwt.refresh.verify(request.body.refresh_token); }
     catch { throw httpError(401, 'Refresh token tidak valid atau kedaluwarsa', 'INVALID_REFRESH_TOKEN'); }
     const user = await db('users').where({ id: payload.sub }).first();
-    if (!user || !user.is_active || Number(payload.ver ?? 0) !== Number(user.token_version ?? 0)) throw httpError(401, 'Refresh token tidak berlaku. Silakan login kembali.', 'UNAUTHORIZED');
-    return app.issueTokens(user);
+    if (!user || !user.is_active || Number(payload.ver ?? 0) !== Number(user.token_version ?? 0) || !payload.sid) throw httpError(401, 'Refresh token tidak berlaku. Silakan login kembali.', 'UNAUTHORIZED');
+    const tokenHash = createHash('sha256').update(request.body.refresh_token).digest('hex');
+    const t = now();
+    const result = await db.transaction(async (trx) => {
+      const session = await trx('user_sessions').where({ id: payload.sid, user_id: user.id }).forUpdate().first();
+      if (!session || session.revoked_at || Number(session.expires_at) <= t || session.refresh_token_hash !== tokenHash) {
+        // Token lama yang dipakai ulang menandakan kemungkinan replay; cabut sesi tersebut.
+        if (session && !session.revoked_at) await trx('user_sessions').where({ id: session.id }).update({ revoked_at: t });
+        return false;
+      }
+      const next = {
+        access_token: app.jwt.sign({ sub: user.id, role: user.role, ver: Number(user.token_version ?? 0), sid: session.id }),
+        refresh_token: app.jwt.refresh.sign({ sub: user.id, role: user.role, ver: Number(user.token_version ?? 0), sid: session.id }),
+      };
+      await trx('user_sessions').where({ id: session.id }).update({
+        refresh_token_hash: createHash('sha256').update(next.refresh_token).digest('hex'),
+        expires_at: Number(app.jwt.refresh.decode(next.refresh_token)?.exp || 0) * 1000,
+        last_used_at: t,
+      });
+      return next;
+    });
+    if (!result) throw httpError(401, 'Refresh token sudah digunakan, dicabut, atau kedaluwarsa.', 'INVALID_REFRESH_TOKEN');
+    return { token_type: 'Bearer', ...result, expires_in: env.jwt.accessExpires };
+  });
+
+  app.post('/auth/logout', {
+    onRequest: [app.authenticate],
+    schema: { tags, summary: 'Logout dari sesi/perangkat saat ini', security: [{ bearerAuth: [] }] },
+  }, async (request) => {
+    await db('user_sessions').where({ id: request.user.sid, user_id: request.auth.id }).whereNull('revoked_at').update({ revoked_at: now() });
+    await logActivity(request, { action: 'auth.logout', entity: 'user', entity_id: request.auth.id, description: 'Logout dari sesi saat ini' });
+    return { message: 'Berhasil logout.' };
+  });
+
+  app.post('/auth/logout-all', {
+    onRequest: [app.authenticate],
+    schema: { tags, summary: 'Logout dari seluruh sesi/perangkat', security: [{ bearerAuth: [] }] },
+  }, async (request) => {
+    const t = now();
+    await db.transaction(async (trx) => {
+      await trx('user_sessions').where({ user_id: request.auth.id }).whereNull('revoked_at').update({ revoked_at: t });
+      await trx('users').where({ id: request.auth.id }).update({ token_version: Number(request.auth.token_version || 0) + 1, updated_at: t });
+    });
+    await logActivity(request, { action: 'auth.logout_all', entity: 'user', entity_id: request.auth.id, description: 'Logout dari seluruh sesi/perangkat' });
+    return { message: 'Berhasil logout dari seluruh perangkat.' };
   });
 
   app.post('/auth/change-password', {
