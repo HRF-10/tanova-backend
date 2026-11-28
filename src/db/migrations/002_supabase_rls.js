@@ -18,10 +18,10 @@ export async function up(knex) {
     do $$
     begin
       if exists (select 1 from pg_roles where rolname = 'anon') then
-        execute 'revoke all on all tables in schema public from anon';
+        execute format('revoke all on all tables in schema %I from anon', current_schema());
       end if;
       if exists (select 1 from pg_roles where rolname = 'authenticated') then
-        execute 'revoke all on all tables in schema public from authenticated';
+        execute format('revoke all on all tables in schema %I from authenticated', current_schema());
       end if;
     end $$;
   `);

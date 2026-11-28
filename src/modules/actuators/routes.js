@@ -10,7 +10,7 @@ import { sendCommand } from '../../services/deviceCommand.js';
 import { withLiveActuatorState } from '../../services/telemetry.js';
 
 const tags = ['Actuators'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 
 export default async function actuatorRoutes(app) {
   const ro = [app.authenticate];

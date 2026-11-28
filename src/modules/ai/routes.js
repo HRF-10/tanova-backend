@@ -15,10 +15,10 @@ import { ghScope } from '../../lib/scope.js';
 import { logActivity } from '../../lib/activity.js';
 import { recommend } from '../../services/recommendations.js';
 import { analyzeWithGemini, getGeminiHealth } from '../../services/aiService.js';
-import { sniffMime, saveImage } from '../../services/imageStore.js';
+import { sniffMime, saveImage, buildImageName } from '../../services/imageStore.js';
 
 const tags = ['Tanova AI'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const idParam = { type: 'object', properties: { id: { type: 'string' } } };
 const CATEGORIES = ['leaf_health', 'nutrient', 'pest', 'disease', 'other'];
 const SEVERITIES = ['none', 'low', 'medium', 'high'];
@@ -61,14 +61,11 @@ export default async function aiRoutes(app) {
     return { total: Number(total), limit, offset, data: rows.map(diagnosisDto) };
   });
 
-  // ESP32 kirim x-api-key (CAMERA_API_KEY); aplikasi kirim Bearer token seperti biasa.
+  // ESP32 kirim x-api-key (CAMERA_API_KEY); user kirim Bearer token atau x-api-key miliknya.
   const hash = (v) => crypto.createHash('sha256').update(String(v)).digest();
   const cameraOrUser = async (request) => {
     const key = request.headers['x-api-key'];
-    if (key) {
-      if (!env.ai.cameraApiKey || !crypto.timingSafeEqual(hash(key), hash(env.ai.cameraApiKey))) {
-        throw httpError(401, 'API key kamera tidak valid', 'INVALID_API_KEY');
-      }
+    if (key && env.ai.cameraApiKey && crypto.timingSafeEqual(hash(key), hash(env.ai.cameraApiKey))) {
       request.isCamera = true;
       return;
     }
@@ -131,7 +128,7 @@ export default async function aiRoutes(app) {
     return { greenhouse_id: scope, device: null };
   }
 
-  async function readMultipart(request) {
+  async function readMultipart(request, account) {
     const fields = {};
     let image_url = null;
     for await (const part of request.parts()) {
@@ -141,7 +138,7 @@ export default async function aiRoutes(app) {
           part.file.resume();
           throw httpError(415, 'Format gambar harus JPEG, PNG, atau WebP', 'UNSUPPORTED_IMAGE');
         }
-        const name = `${newId()}${ext}`;
+        const name = buildImageName(account, ext);
         const dest = path.resolve(env.uploadDir, name);
         await pipeline(part.file, fs.createWriteStream(dest));
         if (part.file.truncated) {
@@ -171,7 +168,8 @@ export default async function aiRoutes(app) {
         'Jika recommendation kosong, rekomendasi dibuat otomatis dari label. Severity "high" membuat notifikasi di aplikasi.',
     },
   }, async (request, reply) => {
-    const body = request.isMultipart() ? await readMultipart(request) : request.body || {};
+    const account = request.auth?.username || request.auth?.name || 'user';
+    const body = request.isMultipart() ? await readMultipart(request, account) : request.body || {};
     if (!body.label || typeof body.label !== 'string') throw httpError(400, 'label wajib diisi', 'VALIDATION_ERROR');
     const category = body.category || 'leaf_health';
     const severity = body.severity || 'none';
@@ -245,7 +243,8 @@ export default async function aiRoutes(app) {
     }
 
     // Simpan file asli sebelum inferensi agar foto tetap tersimpan jika Gemini gagal.
-    const storedImageUrl = await saveImage(buffer, mime);
+    const account = request.auth?.username || request.auth?.name || device?.name || device?.id || 'camera';
+    const storedImageUrl = await saveImage(buffer, mime, account);
     const analysis = await analyzeWithGemini(buffer, mime);
     const { model, latency_ms, result } = analysis;
     if (!analysis.is_plant) {

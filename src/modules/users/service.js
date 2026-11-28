@@ -11,7 +11,7 @@ export async function userWithGreenhouse(userRow) {
     ? [await db('greenhouses').where({ id: userRow.greenhouse_id }).first()].filter(Boolean)
     : []);
   return {
-    ...dto(userRow, { omit: ['password_hash'] }),
+    ...dto(userRow, { omit: ['password_hash', 'api_key_hash', 'api_key_enc'] }),
     greenhouse_ids: greenhouses.map((g) => g.id),
     greenhouses: greenhouses.map((g) => dto(g)),
     greenhouse: greenhouses[0] ? dto(greenhouses[0]) : null,

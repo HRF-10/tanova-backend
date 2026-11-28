@@ -8,7 +8,7 @@ import { sendCommand } from '../../services/deviceCommand.js';
 import { tbFor } from '../../services/thingsboard.js';
 
 const tags = ['Device Config'];
-const security = [{ bearerAuth: [] }];
+const security = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
 const idParam = { type: 'object', properties: { id: { type: 'string' } } };
 
 const configProps = CONFIG_PROPS;
